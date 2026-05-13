@@ -1,14 +1,13 @@
 # V-FLoRA: Federated Fine-Tuning of LoRA Variants
 
-V-FLoRA studies federated instruction tuning with heterogeneous, cumulative, and nonlinear low-rank adapter variants. It builds on FLoRA-style federated aggregation and extends the setup with controlled data partitioning, LayerCraft adapter variants, and multi-round residual adapter composition.
+V-FLoRA studies federated instruction tuning with heterogeneous, cumulative, and nonlinear low-rank adapter variants. It builds on FLoRA-style federated aggregation and extends the setup with controlled data partitioning and multi-round residual adapter composition.
 
 ## Highlights
 
 - Federated fine-tuning for instruction-following LLMs with LoRA-style adapters.
 - Heterogeneous client ranks for non-IID federated settings.
 - Cumulative linear FLoRA, where each round adds a fresh residual adapter.
-- Nonlinear FLoRA, where each residual adapter uses `B * sigma(A * x)`.
-- LayerCraft integration for swapping adapter implementations while preserving the federated training loop.
+- Nonlinear FLoRA, where each residual adapter uses `B * gelu(A * x)`.
 - Dolly and WizardLM client split utilities, including stratified client allocation.
 
 ## Repository Layout
@@ -20,53 +19,83 @@ src/fed_adapter/
   config.py               # dataclass experiment configuration
   selection.py            # deterministic client participation policy
   adapters/base.py        # adapter backend interface
+  adapters/residual.py    # cumulative linear/nonlinear residual LoRA layers
+  cli/train.py            # first replication training path
+  cli/split_data.py       # federated split generation
+  data/prompting.py       # built-in Alpaca-style prompt formatter
   data/schema.py          # Dolly/Alpaca/instruction-output normalization
-tests/                    # CPU-focused unit tests for the rewritten core
-docs/                     # extraction and rewrite planning notes
+  data/splits.py          # Dolly/Wizard split generation
+tests/                    # focused unit tests for the rewritten core
+docs/                     # replication and extraction notes
 ```
 
 ## Installation
 
-The current scaffold is intentionally lightweight. For local development:
+For local development:
 
 ```bash
 python -m venv .venv
 .venv\Scripts\activate
 pip install pytest
+pip install -e .
 ```
 
-Install PyTorch in the environment where you want to run the tensor aggregation tests and future LLM training code.
+For training:
+
+```bash
+pip install -r requirements-train.txt
+```
 
 ## Data Preparation
 
-Generated datasets are not committed by default. The original split-generation script will be ported into `src/fed_adapter/data/` after the training core is in place.
-
-Planned split modes:
+Generated datasets are not committed by default. Current split modes:
 
 - Dolly Dirichlet client partitioning.
 - Dolly stratified partitioning while preserving legacy client sizes.
 - WizardLM stratified partitioning by task family and instruction length.
 
+Example:
+
+```bash
+python -m fed_adapter.cli.split_data ^
+  --dataset wizard ^
+  --mode stratified_keep_sizes ^
+  --num-clients 10 ^
+  --source-root data_wiz ^
+  --output-root data_wiz_stratified
+```
+
 ## Quickstart
 
-Run the current lightweight test suite:
+Run the lightweight test suite:
 
 ```bash
 pytest
 ```
 
-The current repository contains the rewritten core modules first. Full LLM training entrypoints will be added after the adapter backend and training loop are ported into the new structure.
+Run the first nonlinear V-FLoRA replication path:
 
-## Experiments
+```bash
+python -m fed_adapter.cli.train ^
+  --variant nonlinear ^
+  --model tinyllama ^
+  --data-root data_wiz ^
+  --output-dir runs/nonlinear-tinyllama-wiz ^
+  --num-clients 10 ^
+  --rounds 3 ^
+  --rank 16 ^
+  --alpha 32 ^
+  --eval-path mmlu_test_1444.jsonl ^
+  --seed 0
+```
 
-- Experiment 1: expressivity comparison between baseline linear FLoRA, doubled-rank linear adapters, and nonlinear adapters.
-- Experiment 2: multi-round nonlinear FLoRA with fresh residual adapters per communication round.
-- Epoch/round tuning: compare local epoch count and communication-round tradeoffs.
-- Data split comparison: legacy Dirichlet splits versus stratified client-preserving splits.
+Use `--variant cumulative-linear` for the cumulative linear residual variant, and add `--heterogeneous --local-ranks 64,32,16,16,8,8,4,4,4,4` for heterogeneous-rank runs.
+
+See `docs/REPLICATION.md` for the full recipe.
 
 ## Results
 
-Add a compact results table here once the final experiment set is decided.
+Add a compact results table here once the final experiment set is regenerated from this repository.
 
 Recommended columns:
 
@@ -79,13 +108,10 @@ Recommended columns:
 - MMLU or task score
 - Notes
 
-Figures can live under `assets/figures/`.
-
 ## Attribution
 
-This work builds on FLoRA: Federated Fine-Tuning Large Language Models with Heterogeneous Low-Rank Adaptations. Portions of the baseline training flow are adapted from the original FLoRA implementation. The adapter experiments also use PEFT, Hugging Face Transformers, and LayerCraft.
+This work builds on the FLoRA paper: Federated Fine-Tuning Large Language Models with Heterogeneous Low-Rank Adaptations. This repository is a new structured implementation for V-FLoRA experiments; the original public FederatedLLM/FLoRA codebase is cited for the baseline method and experimental context.
 
 ## License
 
-Add the license after checking the upstream FLoRA repository license and any LayerCraft licensing requirements.
-
+A license will be added after clarifying upstream licensing constraints for any remaining inherited material.
