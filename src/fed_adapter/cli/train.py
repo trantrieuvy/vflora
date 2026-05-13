@@ -21,10 +21,25 @@ MODEL_ALIASES = {
     "gpt2": "gpt2",
 }
 
+VARIANT_ALIASES = {
+    "linear-cumulative-flora": "linear-cumulative-flora",
+    "cumulative-linear": "linear-cumulative-flora",
+    "nonlinear-cumulative-flora": "nonlinear-cumulative-flora",
+    "nonlinear": "nonlinear-cumulative-flora",
+}
+
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run V-FLoRA federated adapter training.")
-    parser.add_argument("--variant", choices=("cumulative-linear", "nonlinear"), default="nonlinear")
+    parser.add_argument(
+        "--variant",
+        choices=tuple(VARIANT_ALIASES),
+        default="nonlinear-cumulative-flora",
+        help=(
+            "Federated adapter method. Short aliases 'nonlinear' and "
+            "'cumulative-linear' are kept for compatibility."
+        ),
+    )
     parser.add_argument("--model", default="tinyllama")
     parser.add_argument("--data-root", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
@@ -106,7 +121,8 @@ def train(args: argparse.Namespace) -> None:
     frozen_B = None
     frozen_scaling = args.alpha / args.rank
     accuracies: list[float] = []
-    nonlinear = args.variant == "nonlinear"
+    variant = VARIANT_ALIASES[args.variant]
+    nonlinear = variant == "nonlinear-cumulative-flora"
 
     for round_id in tqdm(range(args.rounds), desc="federated rounds"):
         selected = select_clients(args.num_clients, args.client_fraction, seed=round_id)
@@ -348,7 +364,7 @@ def _write_round_metadata(
 ) -> None:
     metadata = {
         "round": round_id,
-        "variant": args.variant,
+        "variant": variant,
         "selected_clients": selected,
         "client_ranks": {str(key): value for key, value in ranks.items()},
         "client_weights": {str(key): value for key, value in weights.items()},

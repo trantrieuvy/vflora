@@ -1,14 +1,16 @@
 # V-FLoRA: Federated Fine-Tuning of LoRA Variants
 
-V-FLoRA studies federated instruction tuning with heterogeneous, cumulative, and nonlinear low-rank adapter variants. It builds on FLoRA-style federated aggregation and extends the setup with controlled data partitioning and multi-round residual adapter composition.
+V-FLoRA studies strategies for federated instruction tuning with LoRA-style adapter variants. The repo is organized around finding strong federated tuning choices across adapter methods, dataset stratification, and local-epoch/communication-round schedules.
 
 ## Highlights
 
 - Federated fine-tuning for instruction-following LLMs with LoRA-style adapters.
+- Linear cumulative FLoRA, where each round adds a fresh linear residual adapter.
+- Nonlinear cumulative FLoRA, where each residual adapter uses `B * gelu(A * x)`.
+- Nonlinear FFA, where `A` is frozen and only `B` is trained and averaged. Port in progress.
 - Heterogeneous client ranks for non-IID federated settings.
-- Cumulative linear FLoRA, where each round adds a fresh residual adapter.
-- Nonlinear FLoRA, where each residual adapter uses `B * gelu(A * x)`.
 - Dolly and WizardLM client split utilities, including stratified client allocation.
+- Epoch/round tuning workflow based on manifest files. Port in progress.
 
 ## Repository Layout
 
@@ -19,15 +21,28 @@ src/fed_adapter/
   config.py               # dataclass experiment configuration
   selection.py            # deterministic client participation policy
   adapters/base.py        # adapter backend interface
-  adapters/residual.py    # cumulative linear/nonlinear residual LoRA layers
+  adapters/residual.py    # linear/nonlinear cumulative FLoRA layers
   cli/train.py            # first replication training path
   cli/split_data.py       # federated split generation
   data/prompting.py       # built-in Alpaca-style prompt formatter
   data/schema.py          # Dolly/Alpaca/instruction-output normalization
   data/splits.py          # Dolly/Wizard split generation
 tests/                    # focused unit tests for the rewritten core
-docs/                     # replication and extraction notes
+docs/                     # method, replication, and extraction notes
 ```
+
+## Method Overview
+
+V-FLoRA compares adapter methods, data splitting strategies, and epoch/round schedules to identify strong federated tuning strategies.
+
+Current method names:
+
+- `linear-cumulative-flora`
+- `nonlinear-cumulative-flora`
+- `nonlinear-ffa` - port in progress
+- `layercraft-variants` - optional backend planned for broader adapter sweeps
+
+See `docs/METHODS.md` for formulas and Mermaid diagrams showing client updates, server aggregation, and cumulative adapter state.
 
 ## Installation
 
@@ -44,6 +59,12 @@ For training:
 
 ```bash
 pip install -r requirements-train.txt
+```
+
+LayerCraft is not required for the current direct implementations of `linear-cumulative-flora` and `nonlinear-cumulative-flora`. It will be used as an optional backend for LayerCraft adapter-variant experiments:
+
+```bash
+pip install git+https://github.com/trantrieuvy/layercraft.git
 ```
 
 ## Data Preparation
@@ -73,11 +94,11 @@ Run the lightweight test suite:
 pytest
 ```
 
-Run the first nonlinear V-FLoRA replication path:
+Run the first nonlinear cumulative FLoRA replication path:
 
 ```bash
 python -m fed_adapter.cli.train ^
-  --variant nonlinear ^
+  --variant nonlinear-cumulative-flora ^
   --model tinyllama ^
   --data-root data_wiz ^
   --output-dir runs/nonlinear-tinyllama-wiz ^
@@ -89,9 +110,9 @@ python -m fed_adapter.cli.train ^
   --seed 0
 ```
 
-Use `--variant cumulative-linear` for the cumulative linear residual variant, and add `--heterogeneous --local-ranks 64,32,16,16,8,8,4,4,4,4` for heterogeneous-rank runs.
+Use `--variant linear-cumulative-flora` for the cumulative linear residual variant, and add `--heterogeneous --local-ranks 64,32,16,16,8,8,4,4,4,4` for heterogeneous-rank runs.
 
-See `docs/REPLICATION.md` for the full recipe.
+See `docs/REPLICATION.md` for the full run recipe.
 
 ## Results
 
@@ -103,7 +124,9 @@ Recommended columns:
 - Model
 - Method
 - Rank setting
-- Rounds
+- Split strategy
+- Local epochs
+- Communication rounds
 - Seed count
 - MMLU or task score
 - Notes

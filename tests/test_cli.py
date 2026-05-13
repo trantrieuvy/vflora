@@ -7,7 +7,7 @@ def test_train_parser_defaults_without_ml_imports():
         ["--data-root", "data_wiz", "--output-dir", "runs/test"]
     )
 
-    assert args.variant == "nonlinear"
+    assert args.variant == "nonlinear-cumulative-flora"
     assert args.model == "tinyllama"
     assert args.rounds == 3
 
@@ -28,4 +28,3 @@ def test_split_parser_accepts_wizard_stratified_recipe():
 
     assert args.dataset == "wizard"
     assert args.mode == "stratified_keep_sizes"
-

@@ -32,8 +32,8 @@ class FederatedConfig:
 
 @dataclass(frozen=True)
 class AdapterConfig:
-    method: str = "linear"
-    backend: str = "layercraft"
+    method: str = "linear-cumulative-flora"
+    backend: str = "direct"
     rank: int = 16
     alpha: int = 32
     dropout: float = 0.05
@@ -60,4 +60,3 @@ class ExperimentConfig:
     adapter: AdapterConfig = field(default_factory=AdapterConfig)
     local_training: LocalTrainingConfig = field(default_factory=LocalTrainingConfig)
     output_dir: Path = Path("runs/default")
-
