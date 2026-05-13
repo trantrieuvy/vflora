@@ -12,20 +12,24 @@ The experiments compare three axes:
 
 ## Shared Federated Round
 
-Each method follows the same federated pattern:
+Each method follows the same federated pattern for communication rounds `t = 1, ..., T`:
 
 ```mermaid
 flowchart LR
-  G0[Server: frozen base LLM plus current global adapter] --> C1[Client 1]
-  G0 --> C2[Client 2]
-  G0 --> Ck[Client k]
-  C1 --> T1[Local adapter update]
-  C2 --> T2[Local adapter update]
-  Ck --> Tk[Local adapter update]
-  T1 --> S[Server aggregation]
-  T2 --> S
-  Tk --> S
-  S --> G1[Next global adapter state]
+  Gt["Server state at round t: frozen base LLM + global adapter"] --> C1["Client 1"]
+  Gt --> C2["Client 2"]
+  Gt --> Ck["Client k"]
+
+  C1 --> U1["Local adapter update"]
+  C2 --> U2["Local adapter update"]
+  Ck --> Uk["Local adapter update"]
+
+  U1 --> S["Server aggregation"]
+  U2 --> S
+  Uk --> S
+
+  S --> Gnext["Server state at round t + 1"]
+  Gnext -. "repeat until T communication rounds" .-> Gt
 ```
 
 Only adapter parameters are trained or aggregated. The base model remains frozen.
@@ -38,35 +42,53 @@ CLI method name:
 linear-cumulative-flora
 ```
 
-Per client and round:
+Per client `i` in communication round `t`, the trainable residual is linear:
 
-```text
-y = W0 x + s_frozen * B_frozen(A_frozen x) + s_new * B_new(A_new x)
-```
+$$
+h_i^{(t)}(x) = B_i^{(t)} A_i^{(t)} x
+$$
 
-After server aggregation, the new round adapter is appended to the cumulative adapter:
+The model used by the client is:
 
-```text
-y = W0 x + sum_t s_t * B_t(A_t x)
-```
+$$
+y = W_0 x + s \sum_{r < t} B^{(r)} A^{(r)} x + s B_i^{(t)} A_i^{(t)} x
+$$
 
-For one round, client-size weights are applied to `A`, while `B` is concatenated:
+For one server aggregation step with client weights `p_i`, V-FLoRA stacks the client adapters as:
 
-```text
-A_server = concat(p1 A1, p2 A2, ..., pk Ak)
-B_server = concat(B1, B2, ..., Bk) along the rank dimension
-```
+$$
+A^{(t)} = \operatorname{concat}(p_1 A_1^{(t)}, p_2 A_2^{(t)}, \ldots, p_k A_k^{(t)})
+$$
+
+$$
+B^{(t)} = \operatorname{concat}(B_1^{(t)}, B_2^{(t)}, \ldots, B_k^{(t)})
+$$
+
+Weighting `A` or `B` is equivalent for the linear case because the client contribution is bilinear. The implementation weights `A` and leaves `B` unweighted.
 
 ```mermaid
 flowchart TD
-  A1[p1 * A_client1] --> AS[A_server stacked]
-  A2[p2 * A_client2] --> AS
-  B1[B_client1] --> BS[B_server stacked]
-  B2[B_client2] --> BS
-  AS --> R[Round linear residual]
-  BS --> R
-  R --> C[Append to cumulative adapter]
+  subgraph Clients["Selected clients in one round"]
+    C1["Client 1 trains A1 and B1"]
+    C2["Client 2 trains A2 and B2"]
+  end
+
+  C1 --> AStack["Stack weighted A: p1 A1, p2 A2"]
+  C2 --> AStack
+
+  C1 --> BStack["Stack B: B1, B2"]
+  C2 --> BStack
+
+  AStack --> Round["Round adapter: B_server (A_server x)"]
+  BStack --> Round
+  Round --> Global["Append to cumulative linear adapter"]
 ```
+
+After `T` communication rounds, the cumulative adapter is:
+
+$$
+y = W_0 x + s \sum_{t=1}^{T} B^{(t)} A^{(t)} x
+$$
 
 ## Nonlinear Cumulative FLoRA
 
@@ -76,47 +98,53 @@ CLI method name:
 nonlinear-cumulative-flora
 ```
 
-Per client and round:
+Per client `i` in communication round `t`, the trainable residual inserts a nonlinear activation between the two low-rank factors:
 
-```text
-y = W0 x + s_frozen * B_frozen(gelu(A_frozen x)) + s_new * B_new(gelu(A_new x))
-```
+$$
+h_i^{(t)}(x) = B_i^{(t)} \sigma(A_i^{(t)} x), \quad \sigma = \operatorname{GELU}
+$$
 
-After server aggregation:
+The model used by the client is:
 
-```text
-y = W0 x + sum_t s_t * B_t(gelu(A_t x))
-```
+$$
+y = W_0 x + s \sum_{r < t} B^{(r)} \sigma(A^{(r)} x) + s B_i^{(t)} \sigma(A_i^{(t)} x)
+$$
 
-For one round, `A` is concatenated without weighting and client-size weights are applied to `B`:
+For one server aggregation step with client weights `p_i`, V-FLoRA stacks the client adapters as:
 
-```text
-A_server = concat(A1, A2, ..., Ak)
-B_server = concat(p1 B1, p2 B2, ..., pk Bk) along the rank dimension
-```
+$$
+A^{(t)} = \operatorname{concat}(A_1^{(t)}, A_2^{(t)}, \ldots, A_k^{(t)})
+$$
 
-This matters because weighting `A` would place the client weight inside `gelu(.)`, changing the nonlinear function instead of only weighting the client contribution.
+$$
+B^{(t)} = \operatorname{concat}(p_1 B_1^{(t)}, p_2 B_2^{(t)}, \ldots, p_k B_k^{(t)})
+$$
+
+The client weights are applied to `B`, not `A`, because weighting `A` would place `p_i` inside `GELU(.)` and change the nonlinear function.
 
 ```mermaid
 flowchart TD
-  subgraph Clients[Selected clients in one round]
+  subgraph Clients["Selected clients in one round"]
     C1["Client 1 trains A1 and B1"]
     C2["Client 2 trains A2 and B2"]
-    CK["Client k trains Ak and Bk"]
   end
 
-  C1 --> AStack["Stack A without client weights"]
+  C1 --> AStack["Stack A: A1, A2"]
   C2 --> AStack
-  CK --> AStack
 
-  C1 --> BStack["Stack weighted B: p1 B1, p2 B2, ..., pk Bk"]
+  C1 --> BStack["Stack weighted B: p1 B1, p2 B2"]
   C2 --> BStack
-  CK --> BStack
 
-  AStack --> Round["Round adapter: B_server gelu(A_server x)"]
+  AStack --> Round["Round adapter: B_server GELU(A_server x)"]
   BStack --> Round
   Round --> Global["Append to cumulative nonlinear adapter"]
 ```
+
+After `T` communication rounds, the cumulative adapter is:
+
+$$
+y = W_0 x + s \sum_{t=1}^{T} B^{(t)} \sigma(A^{(t)} x)
+$$
 
 ## Nonlinear FFA
 
@@ -128,27 +156,25 @@ nonlinear-ffa
 
 FFA freezes the `A` matrix and trains only `B`:
 
-```text
-y = W0 x + s * B(gelu(A_frozen x))
-```
+$$
+y = W_0 x + s B \sigma(A_{\text{frozen}} x), \quad \sigma = \operatorname{GELU}
+$$
 
-Server aggregation averages only `B`:
+For one server aggregation step, only `B` is averaged:
 
-```text
-B_server = sum_i p_i B_i
-```
+$$
+B^{(t)} = \sum_{i=1}^{k} p_i B_i^{(t)}
+$$
 
 ```mermaid
 flowchart TD
   A["Shared frozen A matrix"] --> C1["Client 1 trains B1 only"]
   A --> C2["Client 2 trains B2 only"]
-  A --> CK["Client k trains Bk only"]
 
-  C1 --> Server["Server computes weighted average of B"]
+  C1 --> Server["Server weighted average: p1 B1 + p2 B2"]
   C2 --> Server
-  CK --> Server
 
-  Server --> Next["B_server is broadcast for the next round"]
+  Server --> Next["Broadcast B_server for the next round"]
 ```
 
 ## LayerCraft Adapter Variants
@@ -186,4 +212,3 @@ manifest -> launch runs -> parse scores/logs -> select efficient schedules
 ```
 
 The manifest format will be added once the active tuning manifests are available.
-
