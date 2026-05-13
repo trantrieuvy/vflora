@@ -99,13 +99,23 @@ This matters because weighting `A` would place the client weight inside `gelu(.)
 
 ```mermaid
 flowchart TD
-  A1[A_client1] --> AS[A_server stacked]
-  A2[A_client2] --> AS
-  B1[p1 * B_client1] --> BS[B_server stacked]
-  B2[p2 * B_client2] --> BS
-  AS --> R[Round nonlinear residual]
-  BS --> R
-  R --> C[Append to cumulative adapter]
+  subgraph Clients[Selected clients in one round]
+    C1["Client 1 trains A1 and B1"]
+    C2["Client 2 trains A2 and B2"]
+    CK["Client k trains Ak and Bk"]
+  end
+
+  C1 --> AStack["Stack A without client weights"]
+  C2 --> AStack
+  CK --> AStack
+
+  C1 --> BStack["Stack weighted B: p1 B1, p2 B2, ..., pk Bk"]
+  C2 --> BStack
+  CK --> BStack
+
+  AStack --> Round["Round adapter: B_server gelu(A_server x)"]
+  BStack --> Round
+  Round --> Global["Append to cumulative nonlinear adapter"]
 ```
 
 ## Nonlinear FFA
@@ -130,13 +140,15 @@ B_server = sum_i p_i B_i
 
 ```mermaid
 flowchart TD
-  A[A_frozen shared by all clients] --> C1[Client 1 trains B1]
-  A --> C2[Client 2 trains B2]
-  A --> Ck[Client k trains Bk]
-  C1 --> S[Weighted average of B]
-  C2 --> S
-  Ck --> S
-  S --> G[B_server for next round]
+  A["Shared frozen A matrix"] --> C1["Client 1 trains B1 only"]
+  A --> C2["Client 2 trains B2 only"]
+  A --> CK["Client k trains Bk only"]
+
+  C1 --> Server["Server computes weighted average of B"]
+  C2 --> Server
+  CK --> Server
+
+  Server --> Next["B_server is broadcast for the next round"]
 ```
 
 ## LayerCraft Adapter Variants
