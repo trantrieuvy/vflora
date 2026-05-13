@@ -57,11 +57,11 @@ $$
 For one server aggregation step with client weights `p_i`, V-FLoRA stacks the client adapters as:
 
 $$
-A^{(t)} = \operatorname{concat}(p_1 A_1^{(t)}, p_2 A_2^{(t)}, \ldots, p_k A_k^{(t)})
+A^{(t)} = \mathrm{concat}(p_1 A_1^{(t)}, p_2 A_2^{(t)}, \ldots, p_k A_k^{(t)})
 $$
 
 $$
-B^{(t)} = \operatorname{concat}(B_1^{(t)}, B_2^{(t)}, \ldots, B_k^{(t)})
+B^{(t)} = \mathrm{concat}(B_1^{(t)}, B_2^{(t)}, \ldots, B_k^{(t)})
 $$
 
 Weighting `A` or `B` is equivalent for the linear case because the client contribution is bilinear. The implementation weights `A` and leaves `B` unweighted.
@@ -101,7 +101,7 @@ nonlinear-cumulative-flora
 Per client `i` in communication round `t`, the trainable residual inserts a nonlinear activation between the two low-rank factors:
 
 $$
-h_i^{(t)}(x) = B_i^{(t)} \sigma(A_i^{(t)} x), \quad \sigma = \operatorname{GELU}
+h_i^{(t)}(x) = B_i^{(t)} \sigma(A_i^{(t)} x), \quad \sigma = \mathrm{GELU}
 $$
 
 The model used by the client is:
@@ -113,11 +113,11 @@ $$
 For one server aggregation step with client weights `p_i`, V-FLoRA stacks the client adapters as:
 
 $$
-A^{(t)} = \operatorname{concat}(A_1^{(t)}, A_2^{(t)}, \ldots, A_k^{(t)})
+A^{(t)} = \mathrm{concat}(A_1^{(t)}, A_2^{(t)}, \ldots, A_k^{(t)})
 $$
 
 $$
-B^{(t)} = \operatorname{concat}(p_1 B_1^{(t)}, p_2 B_2^{(t)}, \ldots, p_k B_k^{(t)})
+B^{(t)} = \mathrm{concat}(p_1 B_1^{(t)}, p_2 B_2^{(t)}, \ldots, p_k B_k^{(t)})
 $$
 
 The client weights are applied to `B`, not `A`, because weighting `A` would place `p_i` inside `GELU(.)` and change the nonlinear function.
@@ -157,7 +157,7 @@ nonlinear-ffa
 FFA freezes the `A` matrix and trains only `B`:
 
 $$
-y = W_0 x + s B \sigma(A_{\text{frozen}} x), \quad \sigma = \operatorname{GELU}
+y = W_0 x + s B \sigma(A_{\mathrm{frozen}} x), \quad \sigma = \mathrm{GELU}
 $$
 
 For one server aggregation step, only `B` is averaged:
