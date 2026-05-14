@@ -4,6 +4,26 @@ These scripts are examples for clusters similar to the environment used for the 
 
 Edit the `#SBATCH` lines to match your cluster before submitting.
 
+## Smoke Test
+
+Use this first to check that the SLURM environment, Conda environment, data path, imports, model loading, and one short federated round work:
+
+```bash
+sbatch scripts/smoke_train.slurm
+```
+
+The smoke test defaults to one communication round, `client_fraction=0.2`, smaller batch sizes, and no evaluation. Override settings as needed:
+
+```bash
+CONDA_ENV=vflora \
+DATA_ROOT=data_wiz \
+MODEL=tinyllama \
+VARIANT=nonlinear-cumulative-flora \
+sbatch scripts/smoke_train.slurm
+```
+
+Set `DEV_DATA_PATH=mmlu_test_1444.jsonl` if you also want to smoke-test evaluation.
+
 ## One Job With Several Example Runs
 
 This runs a small set of currently implemented V-FLoRA methods sequentially in one allocation. For a smaller smoke test, comment out runs near the bottom of `scripts/run_vflora_examples.slurm`:
