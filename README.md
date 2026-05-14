@@ -77,6 +77,8 @@ Generated datasets are not committed by default. Current split modes:
 
 Run split commands from the repository root, or pass absolute paths. For `stratified_keep_sizes`, `--source-root` must already contain an existing federated split such as `data_wiz/10/local_training_0.json` through `local_training_9.json`.
 
+For WizardLM experiments, V-FLoRA follows the project workflow used in the FederatedLLM fork: start from the pre-generated Wizard split (`data_wiz/10/local_training_*.json`), combine those client files, then redistribute them with the stratified keep-sizes splitter. The generated split is not committed because the data files are large.
+
 Example:
 
 ```bash
