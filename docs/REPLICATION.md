@@ -24,7 +24,7 @@ set HF_TOKEN=your_token
 
 ## Data
 
-Generated data is intentionally not committed. Run commands from the repository root, or pass absolute paths.
+Generated data is intentionally not committed. Run commands from the repository root, or pass absolute paths. See `docs/DATA.md` for complete WizardLM and Dolly setup commands.
 
 For WizardLM, V-FLoRA expects the same starting point used in the FederatedLLM experiments: an existing pre-generated 10-client Wizard split. In practice, copy or symlink `data_wiz` from the experiment archive/fork, or pass its absolute path via `--source-root`. The stratified splitter then combines the source clients and redistributes records while preserving the source client sizes.
 
