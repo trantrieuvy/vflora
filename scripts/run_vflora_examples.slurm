@@ -10,8 +10,6 @@
 #SBATCH --time=2-00:00:00
 #SBATCH --mail-type=BEGIN,END
 
-set -euo pipefail
-
 # This script launches several demonstration runs sequentially in one allocation.
 # Comment out any run_method lines at the bottom if you want a smaller smoke test.
 
