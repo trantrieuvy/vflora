@@ -10,8 +10,6 @@
 #SBATCH --time=2-00:00:00
 #SBATCH --mail-type=BEGIN,END
 
-set -euo pipefail
-
 MANIFEST="${MANIFEST:-tuning_manifests/tinyllama_example.tsv}"
 CONDA_ENV="${CONDA_ENV:-vflora}"
 DEV_DATA_PATH="${DEV_DATA_PATH:-mmlu_test_1444.jsonl}"
