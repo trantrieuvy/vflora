@@ -116,7 +116,7 @@ python -m fed_adapter.cli.train \
 
 Use `--variant linear-cumulative-flora` for the cumulative linear residual variant, and add `--heterogeneous --local-ranks 64,32,16,16,8,8,4,4,4,4` for heterogeneous-rank runs.
 
-See `docs/REPLICATION.md` for the full run recipe.
+See `docs/REPLICATION.md` for the full run recipe. See `docs/SLURM.md` for example SLURM scripts.
 
 ## Results
 

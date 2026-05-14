@@ -1,0 +1,7 @@
+variant	dataset	model	setting	epochs	rounds	seed
+nonlinear-cumulative-flora	wiz	tinyllama	homo	1	3	0
+nonlinear-cumulative-flora	wiz	tinyllama	heter	1	3	0
+linear-cumulative-flora	wiz	tinyllama	homo	1	3	0
+linear-cumulative-flora	wiz	tinyllama	heter	1	3	0
+nonlinear-cumulative-flora	wiz_stratified	tinyllama	homo	1	3	0
+linear-cumulative-flora	wiz_stratified	tinyllama	homo	1	3	0

@@ -93,3 +93,14 @@ Each round writes:
 
 If `--eval-path` is provided, `log.txt` contains one score per communication round.
 
+
+## SLURM
+
+Example SLURM launchers are available in `scripts/`:
+
+```bash
+sbatch scripts/run_vflora_examples.slurm
+sbatch --array=1-6 scripts/run_epoch_round_tuning.slurm
+```
+
+See `docs/SLURM.md` for details.
