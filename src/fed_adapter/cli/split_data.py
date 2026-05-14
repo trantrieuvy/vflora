@@ -12,7 +12,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Generate federated client data splits.")
     parser.add_argument("--dataset", choices=("dolly", "wizard"), required=True)
     parser.add_argument("--mode", choices=("dirichlet", "stratified_keep_sizes"), required=True)
-    parser.add_argument("--num-clients", type=int, default=10)
+    parser.add_argument("--num-clients", "--num-client", type=int, default=10)
     parser.add_argument("--output-root", type=Path, required=True)
     parser.add_argument("--source-root", type=Path)
     parser.add_argument("--dataset-path", type=Path)

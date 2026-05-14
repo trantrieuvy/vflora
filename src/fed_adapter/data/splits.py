@@ -91,6 +91,11 @@ def create_dolly_dirichlet_split(request: SplitRequest) -> Path:
 
 def create_dolly_stratified_split(request: SplitRequest) -> Path:
     source_dir = _source_dir(request)
+    _require_split_files(
+        source_dir,
+        request.num_clients,
+        required_global_files=("global_training.json", "global_test.json"),
+    )
     output_dir = _make_output_dir(request.output_root, request.num_clients)
     if source_dir.resolve() == output_dir.resolve():
         raise ValueError("output_root must differ from source_root")
@@ -127,6 +132,7 @@ def create_dolly_stratified_split(request: SplitRequest) -> Path:
 
 def create_wizard_stratified_split(request: SplitRequest) -> Path:
     source_dir = _source_dir(request)
+    _require_split_files(source_dir, request.num_clients)
     output_dir = _make_output_dir(request.output_root, request.num_clients)
     if source_dir.resolve() == output_dir.resolve():
         raise ValueError("output_root must differ from source_root")
@@ -328,6 +334,33 @@ def _bucket_for(value: int, edges: list[int]) -> int:
             return bucket
     return len(edges)
 
+
+def _require_split_files(
+    source_dir: Path,
+    num_clients: int,
+    required_global_files: tuple[str, ...] = (),
+) -> None:
+    missing = [source_dir / filename for filename in required_global_files]
+    missing.extend(
+        source_dir / f"local_training_{client_id}.json"
+        for client_id in range(num_clients)
+    )
+    missing = [path for path in missing if not path.exists()]
+    if not missing:
+        return
+
+    missing_preview = "\n".join(f"  - {path}" for path in missing[:5])
+    if len(missing) > 5:
+        missing_preview += f"\n  ... and {len(missing) - 5} more"
+    raise FileNotFoundError(
+        "Could not find the source federated split files.\n"
+        f"Expected source split directory: {source_dir.resolve()}\n"
+        f"Current working directory: {Path.cwd()}\n"
+        "For relative paths, run the command from the repository root, or pass "
+        "an absolute --source-root path.\n"
+        "Missing files:\n"
+        f"{missing_preview}"
+    )
 
 def _source_dir(request: SplitRequest) -> Path:
     if request.source_root is None:

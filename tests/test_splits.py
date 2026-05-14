@@ -32,3 +32,26 @@ def test_wizard_stratification_labels_include_family_and_bucket():
     assert all("__instruction_len_q" in label for label in labels)
     assert all(isinstance(edge, int) for edge in edges)
 
+
+
+def test_missing_source_split_error_explains_relative_paths(tmp_path):
+    import pytest
+
+    from fed_adapter.data.splits import SplitRequest, create_split
+
+    with pytest.raises(FileNotFoundError) as exc_info:
+        create_split(
+            SplitRequest(
+                dataset="wizard",
+                mode="stratified_keep_sizes",
+                num_clients=2,
+                source_root=tmp_path / "missing_data_wiz",
+                output_root=tmp_path / "data_wiz_stratified",
+            )
+        )
+
+    message = str(exc_info.value)
+    assert "Could not find the source federated split files" in message
+    assert "Current working directory" in message
+    assert "absolute --source-root" in message
+    assert "local_training_0.json" in message

@@ -75,14 +75,16 @@ Generated datasets are not committed by default. Current split modes:
 - Dolly stratified partitioning while preserving legacy client sizes.
 - WizardLM stratified partitioning by task family and instruction length.
 
+Run split commands from the repository root, or pass absolute paths. For `stratified_keep_sizes`, `--source-root` must already contain an existing federated split such as `data_wiz/10/local_training_0.json` through `local_training_9.json`.
+
 Example:
 
 ```bash
-python -m fed_adapter.cli.split_data ^
-  --dataset wizard ^
-  --mode stratified_keep_sizes ^
-  --num-clients 10 ^
-  --source-root data_wiz ^
+python -m fed_adapter.cli.split_data \
+  --dataset wizard \
+  --mode stratified_keep_sizes \
+  --num-clients 10 \
+  --source-root data_wiz \
   --output-root data_wiz_stratified
 ```
 
@@ -97,16 +99,16 @@ pytest
 Run the first nonlinear cumulative FLoRA replication path:
 
 ```bash
-python -m fed_adapter.cli.train ^
-  --variant nonlinear-cumulative-flora ^
-  --model tinyllama ^
-  --data-root data_wiz ^
-  --output-dir runs/nonlinear-tinyllama-wiz ^
-  --num-clients 10 ^
-  --rounds 3 ^
-  --rank 16 ^
-  --alpha 32 ^
-  --eval-path mmlu_test_1444.jsonl ^
+python -m fed_adapter.cli.train \
+  --variant nonlinear-cumulative-flora \
+  --model tinyllama \
+  --data-root data_wiz \
+  --output-dir runs/nonlinear-tinyllama-wiz \
+  --num-clients 10 \
+  --rounds 3 \
+  --rank 16 \
+  --alpha 32 \
+  --eval-path mmlu_test_1444.jsonl \
   --seed 0
 ```
 

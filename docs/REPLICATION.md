@@ -24,7 +24,7 @@ set HF_TOKEN=your_token
 
 ## Data
 
-Generated data is intentionally not committed. The training CLI expects:
+Generated data is intentionally not committed. Run commands from the repository root, or pass absolute paths. The training CLI expects:
 
 ```text
 data_wiz/10/local_training_0.json
@@ -32,34 +32,34 @@ data_wiz/10/local_training_0.json
 data_wiz/10/local_training_9.json
 ```
 
-To create a stratified Wizard split from an existing 10-client Wizard split:
+To create a stratified Wizard split from an existing 10-client Wizard split, `--source-root` must already contain the source split:
 
 ```bash
-python -m fed_adapter.cli.split_data ^
-  --dataset wizard ^
-  --mode stratified_keep_sizes ^
-  --num-clients 10 ^
-  --source-root data_wiz ^
+python -m fed_adapter.cli.split_data \
+  --dataset wizard \
+  --mode stratified_keep_sizes \
+  --num-clients 10 \
+  --source-root data_wiz \
   --output-root data_wiz_stratified
 ```
 
 ## Nonlinear FLoRA
 
 ```bash
-python -m fed_adapter.cli.train ^
-  --variant nonlinear ^
-  --model tinyllama ^
-  --data-root data_wiz ^
-  --output-dir runs/nonlinear-tinyllama-wiz ^
-  --num-clients 10 ^
-  --rounds 3 ^
-  --rank 16 ^
-  --alpha 32 ^
-  --local-epochs 1 ^
-  --local-batch-size 128 ^
-  --micro-batch-size 16 ^
-  --learning-rate 3e-4 ^
-  --eval-path mmlu_test_1444.jsonl ^
+python -m fed_adapter.cli.train \
+  --variant nonlinear-cumulative-flora \
+  --model tinyllama \
+  --data-root data_wiz \
+  --output-dir runs/nonlinear-tinyllama-wiz \
+  --num-clients 10 \
+  --rounds 3 \
+  --rank 16 \
+  --alpha 32 \
+  --local-epochs 1 \
+  --local-batch-size 128 \
+  --micro-batch-size 16 \
+  --learning-rate 3e-4 \
+  --eval-path mmlu_test_1444.jsonl \
   --seed 0
 ```
 
@@ -68,7 +68,7 @@ python -m fed_adapter.cli.train ^
 Use the same command with:
 
 ```bash
---variant cumulative-linear
+--variant linear-cumulative-flora
 ```
 
 ## Heterogeneous Ranks
