@@ -190,7 +190,7 @@ def train(args: argparse.Namespace) -> None:
         round_dir = output_dir / str(round_id)
         torch.save(round_state, round_dir / "adapter_model_delta.bin")
         torch.save(cumulative_state, round_dir / "adapter_model.bin")
-        _write_round_metadata(round_dir, round_id, selected, ranks, weights, round_A, round_B, frozen_A, frozen_B, args)
+        _write_round_metadata(round_dir, round_id, variant, selected, ranks, weights, round_A, round_B, frozen_A, frozen_B, args)
 
         if args.eval_path:
             eval_model, _ = inject_residual_adapters(
@@ -353,6 +353,7 @@ def _evaluate_mmlu(model, tokenizer, template, eval_path: Path, device: str, Gen
 def _write_round_metadata(
     round_dir: Path,
     round_id: int,
+    variant: str,
     selected: list[int],
     ranks: dict[int, int],
     weights: dict[int, float],
