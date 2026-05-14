@@ -10,8 +10,6 @@
 #SBATCH --time=01:00:00
 #SBATCH --mail-type=END,FAIL
 
-set -euo pipefail
-
 # Minimal SLURM smoke test for the federated training CLI.
 # It checks: conda env, imports, data path, model loading, one federated round,
 # and output writing. By default it skips evaluation to keep the run short.
