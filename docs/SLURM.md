@@ -32,6 +32,8 @@ This runs a small set of currently implemented V-FLoRA methods sequentially in o
 - `nonlinear-cumulative-flora`, heterogeneous
 - `linear-cumulative-flora`, homogeneous
 - `linear-cumulative-flora`, heterogeneous
+- `nonlinear-ffa`, homogeneous
+- `nonlinear-ffa`, heterogeneous
 
 ```bash
 sbatch scripts/run_vflora_examples.slurm
@@ -68,10 +70,18 @@ Run every row sequentially in one job:
 sbatch scripts/run_epoch_round_tuning.slurm
 ```
 
-Run rows as a SLURM array. The example manifest has six data rows, so use `1-6`:
+Run rows as a SLURM array. The example manifest has nine data rows, so use `1-9`:
 
 ```bash
-sbatch --array=1-6 scripts/run_epoch_round_tuning.slurm
+sbatch --array=1-9 scripts/run_epoch_round_tuning.slurm
+```
+
+Generate a larger manifest:
+
+```bash
+python -m fed_adapter.cli.generate_manifest \
+  --phase tinyllama-coarse \
+  --output tuning_manifests/tinyllama_coarse.tsv
 ```
 
 Use a different manifest:
@@ -109,6 +119,6 @@ See `docs/DATA.md` for dataset setup.
 
 ## Notes
 
-- `nonlinear-ffa` is not included yet because it has not been ported to the new `vflora` CLI.
+- `linear-cumulative-flora`, `nonlinear-cumulative-flora`, and `nonlinear-ffa` are supported by the current training CLI.
 - The scripts skip completed runs if the expected `log.txt` exists, unless `FORCE=true` is set.
 - Outputs are written under `runs/` by default, which is ignored by Git.

@@ -4,8 +4,8 @@ evaluate==0.4.1
 numpy
 pandas==2.2.1
 peft==0.3.0
+plotly
 sentencepiece==0.1.99
 torch==2.1.1
 transformers==4.40.0
 tqdm==4.65.0
-

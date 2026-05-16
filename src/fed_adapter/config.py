@@ -37,6 +37,8 @@ class AdapterConfig:
     rank: int = 16
     alpha: int = 32
     dropout: float = 0.05
+    activation: str = "gelu"
+    a_init_std: float = 0.02
     heterogeneous: bool = False
     local_ranks: tuple[int, ...] = field(default_factory=tuple)
     aggregation: str = "stack_linear"

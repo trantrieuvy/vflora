@@ -26,6 +26,9 @@ VARIANT_ALIASES = {
     "cumulative-linear": "linear-cumulative-flora",
     "nonlinear-cumulative-flora": "nonlinear-cumulative-flora",
     "nonlinear": "nonlinear-cumulative-flora",
+    "nonlinear-ffa": "nonlinear-ffa",
+    "nonlinear_ffa": "nonlinear-ffa",
+    "ffa": "nonlinear-ffa",
 }
 
 
@@ -36,8 +39,8 @@ def build_parser() -> argparse.ArgumentParser:
         choices=tuple(VARIANT_ALIASES),
         default="nonlinear-cumulative-flora",
         help=(
-            "Federated adapter method. Short aliases 'nonlinear' and "
-            "'cumulative-linear' are kept for compatibility."
+            "Federated adapter method. Short aliases 'nonlinear', "
+            "'cumulative-linear', and 'ffa' are kept for compatibility."
         ),
     )
     parser.add_argument("--model", default="tinyllama")
@@ -50,6 +53,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--rank", type=int, default=16)
     parser.add_argument("--alpha", type=float, default=32)
     parser.add_argument("--dropout", type=float, default=0.05)
+    parser.add_argument("--activation", default="gelu", help="Hidden activation for nonlinear-ffa.")
+    parser.add_argument("--a-init-std", type=float, default=0.02, help="Frozen A initialization std for nonlinear-ffa.")
     parser.add_argument("--target-modules", default="q_proj,v_proj")
     parser.add_argument("--heterogeneous", action="store_true")
     parser.add_argument("--local-ranks", default="64,32,16,16,8,8,4,4,4,4")
@@ -75,7 +80,16 @@ def main(argv: list[str] | None = None) -> None:
 
 def train(args: argparse.Namespace) -> None:
     torch, transformers, load_dataset, AutoModelForCausalLM, AutoTokenizer, GenerationConfig, tqdm = _ml_imports()
-    from fed_adapter.aggregation import normalized_client_weights, stack_linear_lora, stack_nonlinear_lora
+    from fed_adapter.aggregation import aggregate_ffa_b, normalized_client_weights, stack_linear_lora, stack_nonlinear_lora
+    from fed_adapter.adapters.ffa import (
+        ffa_B_state_dict,
+        init_frozen_A,
+        init_zero_B,
+        inject_ffa_adapters,
+        join_ffa_A_state,
+        join_ffa_B_state,
+        split_ffa_B_state,
+    )
     from fed_adapter.adapters.residual import (
         accumulate_adapters,
         adapter_state_dict,
@@ -122,7 +136,24 @@ def train(args: argparse.Namespace) -> None:
     frozen_scaling = args.alpha / args.rank
     accuracies: list[float] = []
     variant = VARIANT_ALIASES[args.variant]
+    ffa = variant == "nonlinear-ffa"
     nonlinear = variant == "nonlinear-cumulative-flora"
+
+    global_ffa_rank = max(local_ranks[: args.num_clients]) if args.heterogeneous else args.rank
+    ffa_A = None
+    ffa_B = None
+    if ffa:
+        model.to("cpu")
+        ffa_A = init_frozen_A(
+            model,
+            target_modules=target_modules,
+            rank=global_ffa_rank,
+            seed=args.seed,
+            init_std=args.a_init_std,
+        )
+        ffa_B = init_zero_B(model, target_modules=target_modules, rank=global_ffa_rank)
+        torch.save(join_ffa_A_state(ffa_A), output_dir / "A_frozen.bin")
+        _write_ffa_config(output_dir, variant, global_ffa_rank, target_modules, args)
 
     for round_id in tqdm(range(args.rounds), desc="federated rounds"):
         selected = select_clients(args.num_clients, args.client_fraction, seed=round_id)
@@ -133,17 +164,30 @@ def train(args: argparse.Namespace) -> None:
             rank = local_ranks[client_id] if args.heterogeneous else args.rank
             alpha = frozen_scaling * rank
             model.to("cpu")
-            client_model, adapter_count = inject_residual_adapters(
-                copy.deepcopy(model),
-                target_modules=target_modules,
-                rank=rank,
-                alpha=alpha,
-                dropout=args.dropout,
-                nonlinear=nonlinear,
-                A_frozen=frozen_A,
-                B_frozen=frozen_B,
-                frozen_scaling=frozen_scaling,
-            )
+            if ffa:
+                assert ffa_A is not None and ffa_B is not None
+                client_model, adapter_count = inject_ffa_adapters(
+                    copy.deepcopy(model),
+                    target_modules=target_modules,
+                    A_frozen=ffa_A,
+                    B_state=ffa_B,
+                    scaling=frozen_scaling,
+                    dropout=args.dropout,
+                    activation=args.activation,
+                    client_rank=rank if args.heterogeneous else None,
+                )
+            else:
+                client_model, adapter_count = inject_residual_adapters(
+                    copy.deepcopy(model),
+                    target_modules=target_modules,
+                    rank=rank,
+                    alpha=alpha,
+                    dropout=args.dropout,
+                    nonlinear=nonlinear,
+                    A_frozen=frozen_A,
+                    B_frozen=frozen_B,
+                    frozen_scaling=frozen_scaling,
+                )
             client_model.to(args.device)
             train_dataset, eval_dataset = _client_dataset(
                 load_dataset,
@@ -166,46 +210,69 @@ def train(args: argparse.Namespace) -> None:
             )
             print(f"round={round_id} client={client_id} rank={rank} adapters={adapter_count}")
             trainer.train()
-            state = adapter_state_dict(client_model)
+            state = ffa_B_state_dict(client_model) if ffa else adapter_state_dict(client_model)
             checkpoint_dir = output_dir / str(round_id) / f"local_output_{client_id}"
             checkpoint_dir.mkdir(parents=True, exist_ok=True)
             torch.save(state, checkpoint_dir / "adapter_model.bin")
             client_sizes[client_id] = len(train_dataset)
-            client_states[client_id] = state
+            client_states[client_id] = split_ffa_B_state(state) if ffa else state
             del trainer, client_model
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
 
         weights = normalized_client_weights(client_sizes)
         ranks = {client_id: (local_ranks[client_id] if args.heterogeneous else args.rank) for client_id in selected}
-        if nonlinear:
+        round_dir = output_dir / str(round_id)
+        if ffa:
+            assert ffa_A is not None and ffa_B is not None
+            ffa_B = aggregate_ffa_b(client_states, weights, ffa_B)
+            torch.save(join_ffa_B_state(ffa_B), round_dir / "adapter_model.bin")
+            _write_ffa_round_metadata(round_dir, round_id, variant, selected, ranks, weights, ffa_A, ffa_B, global_ffa_rank, args)
+        elif nonlinear:
             round_state = stack_nonlinear_lora(client_states, weights, ranks)
+            round_A, round_B = split_adapter_state(round_state)
+            frozen_A, frozen_B = accumulate_adapters(frozen_A, frozen_B, round_A, round_B)
+            cumulative_state = join_adapter_state(frozen_A, frozen_B)
+            torch.save(round_state, round_dir / "adapter_model_delta.bin")
+            torch.save(cumulative_state, round_dir / "adapter_model.bin")
+            _write_round_metadata(round_dir, round_id, variant, selected, ranks, weights, round_A, round_B, frozen_A, frozen_B, args)
         else:
             round_state = stack_linear_lora(client_states, weights, ranks)
-
-        round_A, round_B = split_adapter_state(round_state)
-        frozen_A, frozen_B = accumulate_adapters(frozen_A, frozen_B, round_A, round_B)
-        cumulative_state = join_adapter_state(frozen_A, frozen_B)
-
-        round_dir = output_dir / str(round_id)
-        torch.save(round_state, round_dir / "adapter_model_delta.bin")
-        torch.save(cumulative_state, round_dir / "adapter_model.bin")
-        _write_round_metadata(round_dir, round_id, variant, selected, ranks, weights, round_A, round_B, frozen_A, frozen_B, args)
+            round_A, round_B = split_adapter_state(round_state)
+            frozen_A, frozen_B = accumulate_adapters(frozen_A, frozen_B, round_A, round_B)
+            cumulative_state = join_adapter_state(frozen_A, frozen_B)
+            torch.save(round_state, round_dir / "adapter_model_delta.bin")
+            torch.save(cumulative_state, round_dir / "adapter_model.bin")
+            _write_round_metadata(round_dir, round_id, variant, selected, ranks, weights, round_A, round_B, frozen_A, frozen_B, args)
 
         if args.eval_path:
-            eval_model, _ = inject_residual_adapters(
-                copy.deepcopy(model),
-                target_modules=target_modules,
-                rank=args.rank,
-                alpha=args.alpha,
-                dropout=0.0,
-                nonlinear=nonlinear,
-                A_frozen=frozen_A,
-                B_frozen=frozen_B,
-                frozen_scaling=frozen_scaling,
-            )
+            if ffa:
+                assert ffa_A is not None and ffa_B is not None
+                eval_model, _ = inject_ffa_adapters(
+                    copy.deepcopy(model),
+                    target_modules=target_modules,
+                    A_frozen=ffa_A,
+                    B_state=ffa_B,
+                    scaling=frozen_scaling,
+                    dropout=0.0,
+                    activation=args.activation,
+                    client_rank=None,
+                )
+            else:
+                eval_model, _ = inject_residual_adapters(
+                    copy.deepcopy(model),
+                    target_modules=target_modules,
+                    rank=args.rank,
+                    alpha=args.alpha,
+                    dropout=0.0,
+                    nonlinear=nonlinear,
+                    A_frozen=frozen_A,
+                    B_frozen=frozen_B,
+                    frozen_scaling=frozen_scaling,
+                )
             eval_model.to(args.device)
             accuracy = _evaluate_mmlu(eval_model, tokenizer, template, args.eval_path, args.device, GenerationConfig, torch, tqdm)
+            print(f"Acc round {round_id}: {accuracy}")
             accuracies.append(accuracy)
             del eval_model
             if torch.cuda.is_available():
@@ -375,6 +442,69 @@ def _write_round_metadata(
         "cumulative_adapter_params": sum(value.numel() for value in frozen_A.values()) + sum(value.numel() for value in frozen_B.values()),
         "rank": args.rank,
         "alpha": args.alpha,
+        "heterogeneous": args.heterogeneous,
+    }
+    with (round_dir / "round_config.json").open("w") as outfile:
+        json.dump(metadata, outfile, indent=2)
+
+
+def _write_ffa_config(
+    output_dir: Path,
+    variant: str,
+    global_rank: int,
+    target_modules: list[str],
+    args: argparse.Namespace,
+) -> None:
+    metadata = {
+        "variant": variant,
+        "model": args.model,
+        "num_clients": args.num_clients,
+        "rank": args.rank,
+        "global_rank": global_rank,
+        "alpha": args.alpha,
+        "effective_scaling": args.alpha / args.rank,
+        "dropout": args.dropout,
+        "target_modules": target_modules,
+        "activation": args.activation,
+        "a_init_std": args.a_init_std,
+        "a_init_seed": args.seed,
+        "heterogeneous": args.heterogeneous,
+        "local_ranks": [int(rank) for rank in args.local_ranks.split(",") if rank.strip()]
+        if args.heterogeneous
+        else None,
+    }
+    with (output_dir / "ffa_config.json").open("w") as outfile:
+        json.dump(metadata, outfile, indent=2)
+
+
+def _write_ffa_round_metadata(
+    round_dir: Path,
+    round_id: int,
+    variant: str,
+    selected: list[int],
+    ranks: dict[int, int],
+    weights: dict[int, float],
+    frozen_A,
+    global_B,
+    global_rank: int,
+    args: argparse.Namespace,
+) -> None:
+    metadata = {
+        "round": round_id,
+        "variant": variant,
+        "selected_clients": selected,
+        "client_ranks": {str(key): value for key, value in ranks.items()},
+        "client_weights": {str(key): value for key, value in weights.items()},
+        "round_rank": global_rank,
+        "global_rank": global_rank,
+        "rank_semantics": "ffa_global_B",
+        "frozen_A_params": sum(value.numel() for value in frozen_A.values()),
+        "trainable_B_params": sum(value.numel() for value in global_B.values()),
+        "rank": args.rank,
+        "alpha": args.alpha,
+        "effective_scaling": args.alpha / args.rank,
+        "activation": args.activation,
+        "a_init_std": args.a_init_std,
         "heterogeneous": args.heterogeneous,
     }
     with (round_dir / "round_config.json").open("w") as outfile:

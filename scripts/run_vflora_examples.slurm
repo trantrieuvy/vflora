@@ -77,5 +77,5 @@ run_method nonlinear-cumulative-flora homo
 run_method nonlinear-cumulative-flora heter
 run_method linear-cumulative-flora homo
 run_method linear-cumulative-flora heter
-
-# nonlinear-ffa will be added here once the method is ported.
+run_method nonlinear-ffa homo
+run_method nonlinear-ffa heter

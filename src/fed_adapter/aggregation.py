@@ -83,6 +83,47 @@ def stack_nonlinear_lora(
     return _stack_lora(states, weights, ranks, weight_side="B")
 
 
+def aggregate_ffa_b(
+    states: Mapping[int, TensorState],
+    weights: Mapping[int, float],
+    global_template: TensorState,
+) -> dict[str, torch.Tensor]:
+    """Aggregate FFA B matrices, allowing clients to send lower-rank prefixes."""
+    _validate_state_inputs(states, weights)
+    if not global_template:
+        raise ValueError("global_template cannot be empty")
+    first_client = next(iter(states))
+    if set(states[first_client]) != set(global_template):
+        raise ValueError("FFA B state keys must match the global template")
+
+    aggregated = {
+        key: torch.zeros_like(value.detach(), dtype=torch.float32)
+        for key, value in global_template.items()
+    }
+    for client_id in sorted(states):
+        weight = weights[client_id]
+        for key, tensor in states[client_id].items():
+            if key not in aggregated:
+                raise KeyError(f"unexpected FFA B key from client {client_id}: {key}")
+            target = aggregated[key]
+            tensor = tensor.detach().to(dtype=torch.float32)
+            if tensor.shape == target.shape:
+                target += tensor * weight
+            elif tensor.ndim == 2 and target.ndim == 2 and tensor.shape[0] == target.shape[0]:
+                if tensor.shape[1] > target.shape[1]:
+                    raise ValueError(
+                        f"client {client_id} B rank {tensor.shape[1]} exceeds "
+                        f"global rank {target.shape[1]} for {key}"
+                    )
+                target[:, : tensor.shape[1]] += tensor * weight
+            else:
+                raise ValueError(
+                    f"cannot aggregate FFA B for {key}: "
+                    f"client shape {tuple(tensor.shape)} vs global shape {tuple(target.shape)}"
+                )
+    return aggregated
+
+
 def _stack_lora(
     states: Mapping[int, TensorState],
     weights: Mapping[int, float],
@@ -153,4 +194,3 @@ def _validate_state_inputs(states: Mapping[int, TensorState], weights: Mapping[i
             raise ValueError(
                 f"state keys for client {client_id} do not match client {first_client}"
             )
-

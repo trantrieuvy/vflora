@@ -1,11 +1,11 @@
 # Replicating V-FLoRA Variant Results
 
-This repo is being ported from the working `FederatedLLM` experiment archive into a cleaner standalone implementation. The first supported path is:
+This repo ports reusable pieces from the working `FederatedLLM` experiment archive into a cleaner standalone implementation. The supported core LLM paths are:
 
 - model: `tinyllama`
 - dataset: WizardLM-style client JSON files
-- variant: nonlinear cumulative FLoRA
-- aggregation: stack `A` unweighted and stack weighted `B`
+- variants: linear cumulative FLoRA, nonlinear cumulative FLoRA, and nonlinear FFA
+- aggregation: stacked residual adapters for FLoRA variants; B-only averaging for FFA
 
 ## Environment
 
@@ -75,6 +75,17 @@ Use the same command with:
 --variant linear-cumulative-flora
 ```
 
+## Nonlinear FFA
+
+Use the same command with:
+
+```bash
+--variant nonlinear-ffa
+```
+
+FFA writes `A_frozen.bin` once at the run root, then writes each round's global
+`B` to `adapter_model.bin`.
+
 ## Heterogeneous Ranks
 
 Add:
@@ -91,6 +102,10 @@ Each round writes:
 - `adapter_model.bin`: cumulative frozen adapter through that round
 - `round_config.json`: selected clients, ranks, weights, and parameter counts
 
+For `nonlinear-ffa`, `adapter_model_delta.bin` is not written because the global
+state is the B-only adapter after averaging. The run root also contains
+`A_frozen.bin` and `ffa_config.json`.
+
 If `--eval-path` is provided, `log.txt` contains one score per communication round.
 
 
@@ -100,7 +115,7 @@ Example SLURM launchers are available in `scripts/`:
 
 ```bash
 sbatch scripts/run_vflora_examples.slurm
-sbatch --array=1-6 scripts/run_epoch_round_tuning.slurm
+sbatch --array=1-9 scripts/run_epoch_round_tuning.slurm
 ```
 
 See `docs/SLURM.md` for details.

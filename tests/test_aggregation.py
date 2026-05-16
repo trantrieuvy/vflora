@@ -3,6 +3,7 @@ import pytest
 torch = pytest.importorskip("torch")
 
 from fed_adapter.aggregation import (
+    aggregate_ffa_b,
     normalized_client_weights,
     stack_linear_lora,
     stack_nonlinear_lora,
@@ -81,3 +82,27 @@ def test_stack_nonlinear_lora_weights_b_not_a():
     assert torch.allclose(result["A"][2:3], torch.full((1, 3), 2.0))
     assert torch.allclose(result["B"][:, 0:2], torch.full((4, 2), 0.25))
     assert torch.allclose(result["B"][:, 2:3], torch.full((4, 1), 2.25))
+
+
+def test_aggregate_ffa_b_allows_lower_rank_client_prefixes():
+    states = {
+        0: {"q_proj": torch.ones(2, 2)},
+        1: {"q_proj": torch.full((2, 4), 2.0)},
+    }
+    weights = {0: 0.25, 1: 0.75}
+    template = {"q_proj": torch.zeros(2, 4)}
+
+    result = aggregate_ffa_b(states, weights, template)
+
+    assert result["q_proj"].shape == (2, 4)
+    assert torch.allclose(result["q_proj"][:, :2], torch.full((2, 2), 1.75))
+    assert torch.allclose(result["q_proj"][:, 2:], torch.full((2, 2), 1.5))
+
+
+def test_aggregate_ffa_b_rejects_rank_overflow():
+    states = {0: {"q_proj": torch.ones(2, 5)}}
+    weights = {0: 1.0}
+    template = {"q_proj": torch.zeros(2, 4)}
+
+    with pytest.raises(ValueError, match="exceeds global rank"):
+        aggregate_ffa_b(states, weights, template)

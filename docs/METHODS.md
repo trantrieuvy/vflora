@@ -148,7 +148,7 @@ $$
 
 ## Nonlinear FFA
 
-Planned CLI method name:
+CLI method name:
 
 ```text
 nonlinear-ffa
@@ -166,6 +166,11 @@ $$
 B^{(t)} = \sum_{i=1}^{k} p_i B_i^{(t)}
 $$
 
+The implementation initializes `A` once from the run seed and writes it to
+`A_frozen.bin`. Homogeneous runs use the configured rank. Heterogeneous runs use
+`max(local_ranks)` as the global FFA rank and give each client a prefix slice of
+that shared `A` and `B`.
+
 ```mermaid
 flowchart TD
   A["Shared frozen A matrix"] --> C1["Client 1 trains B1 only"]
@@ -179,7 +184,7 @@ flowchart TD
 
 ## LayerCraft Adapter Variants
 
-LayerCraft is not required for the current direct implementations of `linear-cumulative-flora` and `nonlinear-cumulative-flora`.
+LayerCraft is not required for the current direct implementations of `linear-cumulative-flora`, `nonlinear-cumulative-flora`, and `nonlinear-ffa`.
 
 It is the intended optional backend for broader adapter-variant experiments such as:
 
@@ -205,10 +210,16 @@ V-FLoRA does not commit the generated WizardLM or Dolly splits. Instead, it prov
 
 ## Epoch/Round Tuning
 
-Epoch/round tuning is planned around manifest files. The intended workflow is:
+Epoch/round tuning uses manifest files. The workflow is:
 
 ```text
 manifest -> launch runs -> parse scores/logs -> select efficient schedules
 ```
 
-The manifest format will be added once the active tuning manifests are available.
+Generate manifests with:
+
+```bash
+python -m fed_adapter.cli.generate_manifest --phase tinyllama-coarse
+```
+
+Parse completed and live runs with `fed_adapter.analysis.tuning`.

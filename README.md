@@ -7,10 +7,10 @@ V-FLoRA studies strategies for federated instruction tuning with LoRA-style adap
 - Federated fine-tuning for instruction-following LLMs with LoRA-style adapters.
 - Linear cumulative FLoRA, where each round adds a fresh linear residual adapter.
 - Nonlinear cumulative FLoRA, where each residual adapter uses `B * gelu(A * x)`.
-- Nonlinear FFA, where `A` is frozen and only `B` is trained and averaged. Port in progress.
+- Nonlinear FFA, where `A` is frozen and only `B` is trained and averaged.
 - Heterogeneous client ranks for non-IID federated settings.
 - Dolly and WizardLM client split utilities, including stratified client allocation.
-- Epoch/round tuning workflow based on manifest files. Port in progress.
+- Epoch/round tuning workflow based on manifest files and analysis helpers.
 
 ## Repository Layout
 
@@ -21,7 +21,10 @@ src/fed_adapter/
   config.py               # dataclass experiment configuration
   selection.py            # deterministic client participation policy
   adapters/base.py        # adapter backend interface
+  adapters/ffa.py         # frozen-A/trainable-B FFA adapter
   adapters/residual.py    # linear/nonlinear cumulative FLoRA layers
+  analysis/tuning.py      # epoch/round tuning result parsing and plotting
+  cli/generate_manifest.py # tuning manifest generation
   cli/train.py            # first replication training path
   cli/split_data.py       # federated split generation
   data/prompting.py       # built-in Alpaca-style prompt formatter
@@ -39,7 +42,7 @@ Current method names:
 
 - `linear-cumulative-flora`
 - `nonlinear-cumulative-flora`
-- `nonlinear-ffa` - port in progress
+- `nonlinear-ffa`
 - `layercraft-variants` - optional backend planned for broader adapter sweeps
 
 See `docs/METHODS.md` for formulas and Mermaid diagrams showing client updates, server aggregation, and cumulative adapter state.
@@ -61,7 +64,7 @@ For training:
 pip install -r requirements-train.txt
 ```
 
-LayerCraft is not required for the current direct implementations of `linear-cumulative-flora` and `nonlinear-cumulative-flora`. It will be used as an optional backend for LayerCraft adapter-variant experiments:
+LayerCraft is not required for the current direct implementations of `linear-cumulative-flora`, `nonlinear-cumulative-flora`, and `nonlinear-ffa`. It will be used as an optional backend for LayerCraft adapter-variant experiments:
 
 ```bash
 pip install git+https://github.com/trantrieuvy/layercraft.git
@@ -114,7 +117,7 @@ python -m fed_adapter.cli.train \
   --seed 0
 ```
 
-Use `--variant linear-cumulative-flora` for the cumulative linear residual variant, and add `--heterogeneous --local-ranks 64,32,16,16,8,8,4,4,4,4` for heterogeneous-rank runs.
+Use `--variant linear-cumulative-flora` for the cumulative linear residual variant or `--variant nonlinear-ffa` for frozen-A/trainable-B FFA. Add `--heterogeneous --local-ranks 64,32,16,16,8,8,4,4,4,4` for heterogeneous-rank runs.
 
 See `docs/REPLICATION.md` for the full run recipe. See `docs/SLURM.md` for example SLURM scripts.
 
