@@ -124,6 +124,49 @@ def aggregate_ffa_b(
     return aggregated
 
 
+def stack_rolora_a_teacher(
+    A_states: Mapping[int, TensorState],
+    weights: Mapping[int, float],
+    shared_B: TensorState,
+) -> tuple[dict[str, torch.Tensor], dict[str, torch.Tensor]]:
+    """Build the exact nonlinear RoLoRA A-round teacher.
+
+    When B is shared and clients update A, exact nonlinear FedAvg is:
+    sum_i p_i B_shared sigma(A_i x). This can be represented by stacking A_i
+    and duplicating the weighted shared B blocks.
+    """
+    _validate_state_inputs(A_states, weights)
+    if not shared_B:
+        raise ValueError("shared_B cannot be empty")
+    first_client = next(iter(A_states))
+    if set(A_states[first_client]) != set(shared_B):
+        raise ValueError("RoLoRA A state keys must match shared_B")
+
+    teacher_A: dict[str, list[torch.Tensor]] = {key: [] for key in shared_B}
+    teacher_B: dict[str, list[torch.Tensor]] = {key: [] for key in shared_B}
+    for client_id in sorted(A_states):
+        weight = weights[client_id]
+        for key, A in A_states[client_id].items():
+            if key not in shared_B:
+                raise KeyError(f"unexpected RoLoRA A key from client {client_id}: {key}")
+            B = shared_B[key].detach().to(dtype=torch.float32)
+            A = A.detach().to(dtype=torch.float32)
+            if A.ndim != 2 or B.ndim != 2:
+                raise ValueError(f"RoLoRA teacher tensors for {key} must be 2D")
+            if A.shape[0] != B.shape[1]:
+                raise ValueError(
+                    f"RoLoRA teacher rank mismatch for {key}: "
+                    f"A rank {A.shape[0]} vs B rank {B.shape[1]}"
+                )
+            teacher_A[key].append(A)
+            teacher_B[key].append(B * weight)
+
+    return (
+        {key: torch.cat(parts, dim=0).clone() for key, parts in teacher_A.items()},
+        {key: torch.cat(parts, dim=1).clone() for key, parts in teacher_B.items()},
+    )
+
+
 def _stack_lora(
     states: Mapping[int, TensorState],
     weights: Mapping[int, float],

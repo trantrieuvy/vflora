@@ -4,7 +4,7 @@ This repo ports reusable pieces from the working `FederatedLLM` experiment archi
 
 - model: `tinyllama`
 - dataset: WizardLM-style client JSON files
-- variants: linear cumulative FLoRA, nonlinear cumulative FLoRA, and nonlinear FFA
+- variants: linear cumulative FLoRA, nonlinear cumulative FLoRA, nonlinear FFA, and nonlinear RoLoRA
 - aggregation: stacked residual adapters for FLoRA variants; B-only averaging for FFA
 
 ## Environment
@@ -86,6 +86,20 @@ Use the same command with:
 FFA writes `A_frozen.bin` once at the run root, then writes each round's global
 `B` to `adapter_model.bin`.
 
+## Nonlinear RoLoRA
+
+Use:
+
+```bash
+--variant nonlinear-rolora \
+--calibration-path calibration_prompts.json
+```
+
+RoLoRA alternates B rounds and A rounds. B rounds average the active B factor
+exactly. A rounds build an exact stacked nonlinear teacher, then distill it back
+to the configured rank with prompt-only calibration records from
+`--calibration-path`. Do not pass `global_test.json` as calibration data.
+
 ## Heterogeneous Ranks
 
 Add:
@@ -105,6 +119,11 @@ Each round writes:
 For `nonlinear-ffa`, `adapter_model_delta.bin` is not written because the global
 state is the B-only adapter after averaging. The run root also contains
 `A_frozen.bin` and `ffa_config.json`.
+
+For `nonlinear-rolora`, each round writes the compressed shared adapter to
+`adapter_model.bin`. A-round metadata includes distillation MSE diagnostics in
+`round_config.json`. Exact teacher checkpoints are written only when
+`--save-distill-teacher` is provided.
 
 If `--eval-path` is provided, `log.txt` contains one score per communication round.
 

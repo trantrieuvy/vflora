@@ -29,6 +29,9 @@ VARIANT_ALIASES = {
     "nonlinear-ffa": "nonlinear-ffa",
     "nonlinear_ffa": "nonlinear-ffa",
     "ffa": "nonlinear-ffa",
+    "nonlinear-rolora": "nonlinear-rolora",
+    "nonlinear_rolora": "nonlinear-rolora",
+    "rolora": "nonlinear-rolora",
 }
 
 
@@ -40,21 +43,22 @@ def build_parser() -> argparse.ArgumentParser:
         default="nonlinear-cumulative-flora",
         help=(
             "Federated adapter method. Short aliases 'nonlinear', "
-            "'cumulative-linear', and 'ffa' are kept for compatibility."
+            "'cumulative-linear', 'ffa', and 'rolora' are kept for compatibility."
         ),
     )
     parser.add_argument("--model", default="tinyllama")
     parser.add_argument("--data-root", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--eval-path", type=Path)
+    parser.add_argument("--calibration-path", type=Path)
     parser.add_argument("--num-clients", type=int, default=10)
     parser.add_argument("--rounds", type=int, default=3)
     parser.add_argument("--client-fraction", type=float, default=1.0)
     parser.add_argument("--rank", type=int, default=16)
     parser.add_argument("--alpha", type=float, default=32)
     parser.add_argument("--dropout", type=float, default=0.05)
-    parser.add_argument("--activation", default="gelu", help="Hidden activation for nonlinear-ffa.")
-    parser.add_argument("--a-init-std", type=float, default=0.02, help="Frozen A initialization std for nonlinear-ffa.")
+    parser.add_argument("--activation", default="gelu", help="Hidden activation for nonlinear FFA/RoLoRA.")
+    parser.add_argument("--a-init-std", type=float, default=0.02, help="Seeded A initialization std for nonlinear FFA/RoLoRA.")
     parser.add_argument("--target-modules", default="q_proj,v_proj")
     parser.add_argument("--heterogeneous", action="store_true")
     parser.add_argument("--local-ranks", default="64,32,16,16,8,8,4,4,4,4")
@@ -70,6 +74,15 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--torch-dtype", choices=("float32", "bfloat16", "float16"), default="bfloat16")
     parser.add_argument("--keep-local-checkpoints", action="store_true")
+    parser.add_argument("--distill-calibration-size", type=int, default=512)
+    parser.add_argument("--distill-max-tokens", type=int, default=8192)
+    parser.add_argument("--distill-steps", type=int, default=200)
+    parser.add_argument("--distill-batch-size", type=int, default=64)
+    parser.add_argument("--distill-lr", type=float, default=1e-3)
+    parser.add_argument("--distill-weight-decay", type=float, default=0.0)
+    parser.add_argument("--distill-max-relative-mse", type=float, default=0.25)
+    parser.add_argument("--distill-strict", action="store_true")
+    parser.add_argument("--save-distill-teacher", action="store_true")
     return parser
 
 
@@ -80,7 +93,14 @@ def main(argv: list[str] | None = None) -> None:
 
 def train(args: argparse.Namespace) -> None:
     torch, transformers, load_dataset, AutoModelForCausalLM, AutoTokenizer, GenerationConfig, tqdm = _ml_imports()
-    from fed_adapter.aggregation import aggregate_ffa_b, normalized_client_weights, stack_linear_lora, stack_nonlinear_lora
+    from fed_adapter.aggregation import (
+        aggregate_ffa_b,
+        normalized_client_weights,
+        stack_linear_lora,
+        stack_nonlinear_lora,
+        stack_rolora_a_teacher,
+        weighted_average,
+    )
     from fed_adapter.adapters.ffa import (
         ffa_B_state_dict,
         init_frozen_A,
@@ -97,6 +117,13 @@ def train(args: argparse.Namespace) -> None:
         join_adapter_state,
         split_adapter_state,
     )
+    from fed_adapter.adapters.rolora import (
+        inject_rolora_adapters,
+        join_rolora_state,
+        rolora_active_state_dict,
+        split_rolora_factor_state,
+    )
+    from fed_adapter.distillation import distill_nonlinear_lora_modules
 
     _seed_everything(args.seed, torch)
 
@@ -136,7 +163,9 @@ def train(args: argparse.Namespace) -> None:
     frozen_scaling = args.alpha / args.rank
     accuracies: list[float] = []
     variant = VARIANT_ALIASES[args.variant]
+    _validate_train_args(args, variant)
     ffa = variant == "nonlinear-ffa"
+    rolora = variant == "nonlinear-rolora"
     nonlinear = variant == "nonlinear-cumulative-flora"
 
     global_ffa_rank = max(local_ranks[: args.num_clients]) if args.heterogeneous else args.rank
@@ -155,10 +184,35 @@ def train(args: argparse.Namespace) -> None:
         torch.save(join_ffa_A_state(ffa_A), output_dir / "A_frozen.bin")
         _write_ffa_config(output_dir, variant, global_ffa_rank, target_modules, args)
 
+    rolora_A = None
+    rolora_B = None
+    calibration_prompts: list[str] | None = None
+    if rolora:
+        model.to("cpu")
+        rolora_A = init_frozen_A(
+            model,
+            target_modules=target_modules,
+            rank=args.rank,
+            seed=args.seed,
+            init_std=args.a_init_std,
+        )
+        rolora_B = init_zero_B(model, target_modules=target_modules, rank=args.rank)
+        torch.save(join_rolora_state(rolora_A, rolora_B), output_dir / "adapter_model_initial.bin")
+        _write_rolora_config(output_dir, variant, target_modules, args)
+        if args.rounds > 1:
+            assert args.calibration_path is not None
+            calibration_prompts = _load_calibration_prompts(
+                args.calibration_path,
+                template,
+                args.distill_calibration_size,
+                args.seed,
+            )
+
     for round_id in tqdm(range(args.rounds), desc="federated rounds"):
         selected = select_clients(args.num_clients, args.client_fraction, seed=round_id)
         client_sizes: dict[int, int] = {}
         client_states = {}
+        train_factor = _rolora_train_factor(round_id) if rolora else None
 
         for client_id in selected:
             rank = local_ranks[client_id] if args.heterogeneous else args.rank
@@ -175,6 +229,18 @@ def train(args: argparse.Namespace) -> None:
                     dropout=args.dropout,
                     activation=args.activation,
                     client_rank=rank if args.heterogeneous else None,
+                )
+            elif rolora:
+                assert rolora_A is not None and rolora_B is not None and train_factor is not None
+                client_model, adapter_count = inject_rolora_adapters(
+                    copy.deepcopy(model),
+                    target_modules=target_modules,
+                    A_state=rolora_A,
+                    B_state=rolora_B,
+                    scaling=frozen_scaling,
+                    dropout=args.dropout,
+                    activation=args.activation,
+                    train_factor=train_factor,
                 )
             else:
                 client_model, adapter_count = inject_residual_adapters(
@@ -210,12 +276,24 @@ def train(args: argparse.Namespace) -> None:
             )
             print(f"round={round_id} client={client_id} rank={rank} adapters={adapter_count}")
             trainer.train()
-            state = ffa_B_state_dict(client_model) if ffa else adapter_state_dict(client_model)
+            if ffa:
+                state = ffa_B_state_dict(client_model)
+            elif rolora:
+                assert train_factor is not None
+                state = rolora_active_state_dict(client_model, train_factor)
+            else:
+                state = adapter_state_dict(client_model)
             checkpoint_dir = output_dir / str(round_id) / f"local_output_{client_id}"
             checkpoint_dir.mkdir(parents=True, exist_ok=True)
             torch.save(state, checkpoint_dir / "adapter_model.bin")
             client_sizes[client_id] = len(train_dataset)
-            client_states[client_id] = split_ffa_B_state(state) if ffa else state
+            if ffa:
+                client_states[client_id] = split_ffa_B_state(state)
+            elif rolora:
+                assert train_factor is not None
+                client_states[client_id] = split_rolora_factor_state(state, train_factor)
+            else:
+                client_states[client_id] = state
             del trainer, client_model
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
@@ -228,6 +306,75 @@ def train(args: argparse.Namespace) -> None:
             ffa_B = aggregate_ffa_b(client_states, weights, ffa_B)
             torch.save(join_ffa_B_state(ffa_B), round_dir / "adapter_model.bin")
             _write_ffa_round_metadata(round_dir, round_id, variant, selected, ranks, weights, ffa_A, ffa_B, global_ffa_rank, args)
+        elif rolora:
+            assert rolora_A is not None and rolora_B is not None and train_factor is not None
+            distill_metrics = None
+            if train_factor == "B":
+                rolora_B = aggregate_ffa_b(client_states, weights, rolora_B)
+            else:
+                assert calibration_prompts is not None
+                teacher_A, teacher_B = stack_rolora_a_teacher(client_states, weights, rolora_B)
+                init_A = weighted_average(client_states, weights)
+                init_B = {name: value.detach().cpu().clone() for name, value in rolora_B.items()}
+                if args.save_distill_teacher:
+                    torch.save(join_rolora_state(teacher_A, teacher_B), round_dir / "adapter_model_teacher.bin")
+                teacher_model, _ = inject_rolora_adapters(
+                    copy.deepcopy(model),
+                    target_modules=target_modules,
+                    A_state=teacher_A,
+                    B_state=teacher_B,
+                    scaling=frozen_scaling,
+                    dropout=0.0,
+                    activation=args.activation,
+                    train_factor=None,
+                )
+                teacher_model.to(args.device)
+                activation_inputs = _capture_teacher_inputs(
+                    teacher_model,
+                    tokenizer,
+                    calibration_prompts,
+                    target_names=sorted(teacher_A),
+                    max_tokens=args.distill_max_tokens,
+                    batch_size=args.micro_batch_size,
+                    cutoff_len=args.cutoff_len,
+                    device=args.device,
+                    seed=args.seed + round_id,
+                    torch=torch,
+                )
+                rolora_A, rolora_B, distill_metrics = distill_nonlinear_lora_modules(
+                    activation_inputs,
+                    teacher_A,
+                    teacher_B,
+                    init_A,
+                    init_B,
+                    activation=args.activation,
+                    steps=args.distill_steps,
+                    batch_size=args.distill_batch_size,
+                    lr=args.distill_lr,
+                    weight_decay=args.distill_weight_decay,
+                    max_relative_mse=args.distill_max_relative_mse,
+                    strict=args.distill_strict,
+                    seed=args.seed + round_id,
+                    device=args.device,
+                )
+                del teacher_model
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+            torch.save(join_rolora_state(rolora_A, rolora_B), round_dir / "adapter_model.bin")
+            _write_rolora_round_metadata(
+                round_dir,
+                round_id,
+                variant,
+                selected,
+                ranks,
+                weights,
+                train_factor,
+                rolora_A,
+                rolora_B,
+                distill_metrics,
+                args,
+                calibration_count=len(calibration_prompts or []),
+            )
         elif nonlinear:
             round_state = stack_nonlinear_lora(client_states, weights, ranks)
             round_A, round_B = split_adapter_state(round_state)
@@ -258,6 +405,18 @@ def train(args: argparse.Namespace) -> None:
                     activation=args.activation,
                     client_rank=None,
                 )
+            elif rolora:
+                assert rolora_A is not None and rolora_B is not None
+                eval_model, _ = inject_rolora_adapters(
+                    copy.deepcopy(model),
+                    target_modules=target_modules,
+                    A_state=rolora_A,
+                    B_state=rolora_B,
+                    scaling=frozen_scaling,
+                    dropout=0.0,
+                    activation=args.activation,
+                    train_factor=None,
+                )
             else:
                 eval_model, _ = inject_residual_adapters(
                     copy.deepcopy(model),
@@ -286,6 +445,188 @@ def train(args: argparse.Namespace) -> None:
         with (output_dir / "log.txt").open("w") as outfile:
             for accuracy in accuracies:
                 outfile.write(f"{accuracy}\n")
+
+
+def _validate_train_args(args: argparse.Namespace, variant: str) -> None:
+    if variant != "nonlinear-rolora":
+        return
+    if args.heterogeneous:
+        raise ValueError("nonlinear-rolora currently supports homogeneous rank only")
+    if args.calibration_path is not None and args.calibration_path.name == "global_test.json":
+        raise ValueError("nonlinear-rolora distillation must not use global_test.json")
+    if args.rounds > 1 and args.calibration_path is None:
+        raise ValueError("--calibration-path is required for nonlinear-rolora A-round distillation")
+    if args.distill_calibration_size <= 0:
+        raise ValueError("--distill-calibration-size must be positive")
+    if args.distill_max_tokens <= 0:
+        raise ValueError("--distill-max-tokens must be positive")
+    if args.distill_steps < 0:
+        raise ValueError("--distill-steps cannot be negative")
+    if args.distill_batch_size <= 0:
+        raise ValueError("--distill-batch-size must be positive")
+
+
+def _rolora_train_factor(round_id: int) -> str:
+    return "B" if round_id % 2 == 0 else "A"
+
+
+def _load_calibration_prompts(
+    path: Path,
+    template,
+    limit: int,
+    seed: int,
+) -> list[str]:
+    records = _read_records(path)
+    rng = random.Random(seed)
+    rng.shuffle(records)
+    prompts: list[str] = []
+    for record in records:
+        try:
+            prompt = _calibration_prompt(record, template)
+        except ValueError:
+            continue
+        if prompt.strip():
+            prompts.append(prompt)
+        if len(prompts) >= limit:
+            break
+    if not prompts:
+        raise ValueError(f"No usable calibration prompts found in {path}")
+    return prompts
+
+
+def _read_records(path: Path) -> list[dict[str, object]]:
+    text = path.read_text().strip()
+    if not text:
+        return []
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError:
+        records = [json.loads(line) for line in text.splitlines() if line.strip()]
+    else:
+        if isinstance(parsed, list):
+            records = parsed
+        elif isinstance(parsed, dict):
+            for key in ("records", "data", "examples"):
+                if isinstance(parsed.get(key), list):
+                    records = parsed[key]
+                    break
+            else:
+                records = [parsed]
+        else:
+            raise ValueError(f"Unsupported calibration JSON root in {path}")
+    return [record for record in records if isinstance(record, dict)]
+
+
+def _calibration_prompt(record: dict[str, object], template) -> str:
+    if "instruction" not in record:
+        raise ValueError("calibration record is missing instruction")
+    prompt_record = {
+        "instruction": record["instruction"],
+        "input": record.get("input", record.get("context", "")),
+        "output": "",
+    }
+    normalized = normalize_record(prompt_record)
+    return template.format(normalized, include_response=False)
+
+
+def _capture_teacher_inputs(
+    teacher_model,
+    tokenizer,
+    prompts: list[str],
+    *,
+    target_names: list[str],
+    max_tokens: int,
+    batch_size: int,
+    cutoff_len: int,
+    device: str,
+    seed: int,
+    torch,
+) -> dict[str, object]:
+    captured: dict[str, list[object]] = {name: [] for name in target_names}
+    counts = {name: 0 for name in target_names}
+    generators = {}
+    for index, name in enumerate(target_names):
+        generator = torch.Generator(device="cpu")
+        generator.manual_seed(seed + index)
+        generators[name] = generator
+
+    current_mask = None
+    handles = []
+
+    def make_hook(name: str):
+        def hook(_module, inputs):
+            if not inputs:
+                return
+            x = inputs[0].detach().to(device="cpu", dtype=torch.float32)
+            if x.ndim == 3 and current_mask is not None and tuple(current_mask.shape) == tuple(x.shape[:2]):
+                rows = x[current_mask.to(device="cpu", dtype=torch.bool)]
+            else:
+                rows = x.reshape(-1, x.shape[-1])
+            if rows.numel() == 0:
+                return
+            _append_limited_rows(captured, counts, name, rows, max_tokens, generators[name], torch)
+
+        return hook
+
+    target_set = set(target_names)
+    for name, module in teacher_model.named_modules():
+        if name in target_set:
+            handles.append(module.register_forward_pre_hook(make_hook(name)))
+    if len(handles) != len(target_names):
+        found = {name for name, module in teacher_model.named_modules() if name in target_set}
+        missing = sorted(target_set - found)
+        raise ValueError(f"Could not register calibration hooks for target modules: {missing}")
+
+    teacher_model.eval()
+    try:
+        for start in range(0, len(prompts), max(1, batch_size)):
+            batch_prompts = prompts[start : start + max(1, batch_size)]
+            encoded = tokenizer(
+                batch_prompts,
+                truncation=True,
+                max_length=cutoff_len,
+                padding=True,
+                return_tensors="pt",
+            )
+            batch = {key: value.to(device) for key, value in encoded.items()}
+            current_mask = batch.get("attention_mask")
+            with torch.no_grad():
+                teacher_model(**batch)
+    finally:
+        for handle in handles:
+            handle.remove()
+
+    result = {
+        name: _finalize_limited_rows(captured[name], max_tokens, generators[name], torch)
+        for name in target_names
+    }
+    empty = [name for name, value in result.items() if value.shape[0] == 0]
+    if empty:
+        raise ValueError(f"No calibration activations captured for target modules: {empty}")
+    return result
+
+
+def _append_limited_rows(captured, counts, name, rows, max_tokens, generator, torch) -> None:
+    captured[name].append(rows.detach().cpu())
+    counts[name] += rows.shape[0]
+    if counts[name] <= max_tokens * 2:
+        return
+    merged = torch.cat(captured[name], dim=0)
+    if merged.shape[0] > max_tokens:
+        indices = torch.randperm(merged.shape[0], generator=generator)[:max_tokens]
+        merged = merged.index_select(0, indices)
+    captured[name] = [merged.contiguous()]
+    counts[name] = merged.shape[0]
+
+
+def _finalize_limited_rows(parts, max_tokens, generator, torch):
+    if not parts:
+        return torch.empty(0, 0)
+    merged = torch.cat(parts, dim=0)
+    if merged.shape[0] > max_tokens:
+        indices = torch.randperm(merged.shape[0], generator=generator)[:max_tokens]
+        merged = merged.index_select(0, indices)
+    return merged.contiguous()
 
 
 def _client_dataset(
@@ -477,6 +818,40 @@ def _write_ffa_config(
         json.dump(metadata, outfile, indent=2)
 
 
+def _write_rolora_config(
+    output_dir: Path,
+    variant: str,
+    target_modules: list[str],
+    args: argparse.Namespace,
+) -> None:
+    metadata = {
+        "variant": variant,
+        "model": args.model,
+        "num_clients": args.num_clients,
+        "rank": args.rank,
+        "alpha": args.alpha,
+        "effective_scaling": args.alpha / args.rank,
+        "dropout": args.dropout,
+        "target_modules": target_modules,
+        "activation": args.activation,
+        "a_init_std": args.a_init_std,
+        "a_init_seed": args.seed,
+        "heterogeneous": False,
+        "round_schedule": "B,A alternating from round 0",
+        "calibration_path": str(args.calibration_path) if args.calibration_path else None,
+        "distill_calibration_size": args.distill_calibration_size,
+        "distill_max_tokens": args.distill_max_tokens,
+        "distill_steps": args.distill_steps,
+        "distill_batch_size": args.distill_batch_size,
+        "distill_lr": args.distill_lr,
+        "distill_weight_decay": args.distill_weight_decay,
+        "distill_max_relative_mse": args.distill_max_relative_mse,
+        "distill_strict": args.distill_strict,
+    }
+    with (output_dir / "rolora_config.json").open("w") as outfile:
+        json.dump(metadata, outfile, indent=2)
+
+
 def _write_ffa_round_metadata(
     round_dir: Path,
     round_id: int,
@@ -506,6 +881,48 @@ def _write_ffa_round_metadata(
         "activation": args.activation,
         "a_init_std": args.a_init_std,
         "heterogeneous": args.heterogeneous,
+    }
+    with (round_dir / "round_config.json").open("w") as outfile:
+        json.dump(metadata, outfile, indent=2)
+
+
+def _write_rolora_round_metadata(
+    round_dir: Path,
+    round_id: int,
+    variant: str,
+    selected: list[int],
+    ranks: dict[int, int],
+    weights: dict[int, float],
+    train_factor: str,
+    global_A,
+    global_B,
+    distill_metrics,
+    args: argparse.Namespace,
+    calibration_count: int,
+) -> None:
+    distillation_ran = distill_metrics is not None
+    metadata = {
+        "round": round_id,
+        "variant": variant,
+        "selected_clients": selected,
+        "client_ranks": {str(key): value for key, value in ranks.items()},
+        "client_weights": {str(key): value for key, value in weights.items()},
+        "trained_factor": train_factor,
+        "round_rank": args.rank,
+        "global_rank": args.rank,
+        "rank_semantics": "fixed_rolora_rank",
+        "global_A_params": sum(value.numel() for value in global_A.values()),
+        "global_B_params": sum(value.numel() for value in global_B.values()),
+        "rank": args.rank,
+        "alpha": args.alpha,
+        "effective_scaling": args.alpha / args.rank,
+        "activation": args.activation,
+        "a_init_std": args.a_init_std,
+        "heterogeneous": False,
+        "distillation_ran": distillation_ran,
+        "calibration_path": str(args.calibration_path) if args.calibration_path else None,
+        "calibration_records": calibration_count if distillation_ran else 0,
+        "distill_metrics": distill_metrics,
     }
     with (round_dir / "round_config.json").open("w") as outfile:
         json.dump(metadata, outfile, indent=2)

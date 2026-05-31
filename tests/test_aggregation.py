@@ -7,6 +7,7 @@ from fed_adapter.aggregation import (
     normalized_client_weights,
     stack_linear_lora,
     stack_nonlinear_lora,
+    stack_rolora_a_teacher,
     weighted_average,
     zero_pad_by_rank,
 )
@@ -106,3 +107,21 @@ def test_aggregate_ffa_b_rejects_rank_overflow():
 
     with pytest.raises(ValueError, match="exceeds global rank"):
         aggregate_ffa_b(states, weights, template)
+
+
+def test_stack_rolora_a_teacher_duplicates_weighted_shared_b():
+    states = {
+        0: {"q_proj": torch.ones(2, 3)},
+        1: {"q_proj": torch.full((2, 3), 2.0)},
+    }
+    weights = {0: 0.25, 1: 0.75}
+    shared_B = {"q_proj": torch.full((4, 2), 3.0)}
+
+    teacher_A, teacher_B = stack_rolora_a_teacher(states, weights, shared_B)
+
+    assert teacher_A["q_proj"].shape == (4, 3)
+    assert teacher_B["q_proj"].shape == (4, 4)
+    assert torch.allclose(teacher_A["q_proj"][0:2], torch.ones(2, 3))
+    assert torch.allclose(teacher_A["q_proj"][2:4], torch.full((2, 3), 2.0))
+    assert torch.allclose(teacher_B["q_proj"][:, 0:2], torch.full((4, 2), 0.75))
+    assert torch.allclose(teacher_B["q_proj"][:, 2:4], torch.full((4, 2), 2.25))

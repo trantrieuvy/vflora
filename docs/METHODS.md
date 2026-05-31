@@ -6,7 +6,7 @@ V-FLoRA is organized around one question:
 
 The experiments compare three axes:
 
-- **Adapter variant:** linear cumulative FLoRA, nonlinear cumulative FLoRA, nonlinear FFA, and future LayerCraft adapter variants.
+- **Adapter variant:** linear cumulative FLoRA, nonlinear cumulative FLoRA, nonlinear FFA, nonlinear RoLoRA, and future LayerCraft adapter variants.
 - **Data strategy:** non-IID Dirichlet splits versus stratified client-preserving splits.
 - **Training schedule:** local epoch count versus communication-round budget.
 
@@ -182,9 +182,55 @@ flowchart TD
   Server --> Next["Broadcast B_server for the next round"]
 ```
 
+## Nonlinear RoLoRA
+
+CLI method name:
+
+```text
+nonlinear-rolora
+```
+
+RoLoRA alternates which low-rank factor is trainable. V-FLoRA's nonlinear
+variant keeps the adapter form:
+
+$$
+y = W_0 x + s B \sigma(Ax), \quad \sigma = \mathrm{GELU}
+$$
+
+On B-update rounds, all clients receive the same frozen `A` and train only
+`B_i`. Aggregation is exact:
+
+$$
+B_{\mathrm{next}} = \sum_i p_i B_i
+$$
+
+On A-update rounds, all clients receive the same frozen `B` and train only
+`A_i`. A naive weighted average of A is not exact because:
+
+$$
+\sum_i p_i B \sigma(A_i x) \ne B \sigma((\sum_i p_i A_i)x)
+$$
+
+The server therefore builds the exact stacked teacher:
+
+$$
+h_{\mathrm{teacher}}(x) = \sum_i p_i B_{\mathrm{shared}}\sigma(A_i x)
+$$
+
+and functionally distills it back to the configured rank:
+
+$$
+h_{\mathrm{student}}(x) = B_c \sigma(A_c x)
+$$
+
+Distillation is module-wise and matches adapter residuals on hidden activations
+captured from an exact teacher forward pass over a prompt-only calibration set.
+The calibration set must be supplied explicitly with `--calibration-path`; the
+held-out test set must not be used for distillation.
+
 ## LayerCraft Adapter Variants
 
-LayerCraft is not required for the current direct implementations of `linear-cumulative-flora`, `nonlinear-cumulative-flora`, and `nonlinear-ffa`.
+LayerCraft is not required for the current direct implementations of `linear-cumulative-flora`, `nonlinear-cumulative-flora`, `nonlinear-ffa`, and `nonlinear-rolora`.
 
 It is the intended optional backend for broader adapter-variant experiments such as:
 

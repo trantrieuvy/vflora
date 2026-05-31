@@ -36,6 +36,25 @@ def test_train_parser_accepts_ffa_aliases_without_ml_imports():
     assert args.a_init_std == 0.01
 
 
+def test_train_parser_accepts_rolora_alias_without_ml_imports():
+    args = build_train_parser().parse_args(
+        [
+            "--variant",
+            "rolora",
+            "--data-root",
+            "data_wiz",
+            "--output-dir",
+            "runs/test",
+            "--calibration-path",
+            "calibration.json",
+        ]
+    )
+
+    assert VARIANT_ALIASES[args.variant] == "nonlinear-rolora"
+    assert args.calibration_path.name == "calibration.json"
+    assert args.distill_steps == 200
+
+
 def test_manifest_parser_smoke_rows_include_ffa():
     args = build_manifest_parser().parse_args(["--phase", "smoke"])
     rows = manifest_rows(args)
@@ -129,3 +148,55 @@ def test_write_ffa_round_metadata_records_global_rank(tmp_path):
     assert metadata["variant"] == "nonlinear-ffa"
     assert metadata["rank_semantics"] == "ffa_global_B"
     assert metadata["global_rank"] == 64
+
+
+def test_rolora_validation_rejects_heterogeneous_and_global_test():
+    import argparse
+    import pytest
+    from pathlib import Path
+
+    from fed_adapter.cli.train import _validate_train_args
+
+    args = argparse.Namespace(
+        heterogeneous=True,
+        calibration_path=Path("calibration.json"),
+        rounds=2,
+        distill_calibration_size=512,
+        distill_max_tokens=8192,
+        distill_steps=200,
+        distill_batch_size=64,
+    )
+    with pytest.raises(ValueError, match="homogeneous"):
+        _validate_train_args(args, "nonlinear-rolora")
+
+    args.heterogeneous = False
+    args.calibration_path = Path("global_test.json")
+    with pytest.raises(ValueError, match="global_test"):
+        _validate_train_args(args, "nonlinear-rolora")
+
+
+def test_calibration_prompts_ignore_output(tmp_path):
+    import json
+
+    from fed_adapter.cli.train import _load_calibration_prompts
+    from fed_adapter.data.prompting import get_template
+
+    path = tmp_path / "calibration.json"
+    path.write_text(
+        json.dumps(
+            [
+                {
+                    "instruction": "Classify this.",
+                    "input": "Premise text",
+                    "output": "SECRET_LABEL",
+                }
+            ]
+        )
+    )
+
+    prompts = _load_calibration_prompts(path, get_template("alpaca"), limit=10, seed=0)
+
+    assert len(prompts) == 1
+    assert "Classify this." in prompts[0]
+    assert "Premise text" in prompts[0]
+    assert "SECRET_LABEL" not in prompts[0]
