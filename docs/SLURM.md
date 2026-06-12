@@ -160,6 +160,18 @@ scripts/submit_qnli_e20r150_pipeline.sh 1 15
 
 The e20/r30 wrapper intentionally defaults to `TOTAL_SEGMENTS=3` and a manifest with `rounds=30`. Running `scripts/submit_qnli_e20r30_pipeline.sh 1 15` is therefore not the right way to request 150 rounds; use the e20/r150 wrapper or override both `MANIFEST` and `TOTAL_SEGMENTS` together.
 
+### Monitoring Notebook
+
+After activating the standalone environment, launch the ported monitoring notebook from the repository root:
+
+```bash
+module load conda
+conda activate vflora
+jupyter lab glue_high_round_monitoring.ipynb
+```
+
+The notebook defaults to `epoch_round_tuning_qnli_client_count_e20_r150` and scans completed `round_config.json` files for QNLI accuracy. Rerun the QNLI cells while the segmented pipeline is active to refresh the latest completed communication round for each method and client count. CSV summaries are written under `tuning_analysis_outputs/glue_high_round_monitoring`; interactive Plotly HTML files are written under `plots_epoch_round_tuning/glue_high_round_monitoring`.
+
 ## Required Data Layout
 
 The scripts expect data roots like:

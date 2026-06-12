@@ -2,7 +2,7 @@
 
 - Status: canceled after verification.
 - Submitted: 2026-06-12 19:04:32 CEST.
-- Last checked: 2026-06-12 19:06 CEST.
+- Last checked: 2026-06-12 20:26 CEST.
 - Workdir: `/homes/neumann/trieu.vy.tran/vflora`.
 - Submit command: `scripts/submit_qnli_e20r150_pipeline.sh 1 15`.
 - Launcher: `scripts/submit_qnli_e20r150_pipeline.sh` -> `scripts/submit_roberta_glue_pipeline.sh`.
@@ -75,3 +75,15 @@ Post-cancel checks:
 
 - `squeue --me` showed no remaining jobs from this submission.
 - `sacct` reported `CANCELLED by 21197` for `40015`-`40104`; only the first four had nonzero runtime, about one minute.
+
+## Monitoring Notebook
+
+The standalone monitoring entry point is `glue_high_round_monitoring.ipynb` in the vflora repository root. It defaults to this run root and scans completed `round_config.json` files for QNLI accuracy by method, client count, and communication round.
+
+Launch it from the activated environment:
+
+```bash
+jupyter lab glue_high_round_monitoring.ipynb
+```
+
+Verification on 2026-06-12 executed all 13 notebook cells with the vflora kernel. This canceled smoke run has no completed `round_config.json` yet, so the notebook correctly reported zero completed QNLI rounds and wrote empty summary CSVs without errors.

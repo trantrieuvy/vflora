@@ -168,6 +168,15 @@ GLUE reports MNLI matched/mismatched overall accuracy, CoLA Matthew's correlatio
 
 See `docs/REPLICATION.md` for the full run recipe. See `docs/SLURM.md` for example SLURM scripts.
 
+Monitor segmented GLUE runs from the repository root with:
+
+```bash
+jupyter lab glue_high_round_monitoring.ipynb
+```
+
+The notebook defaults to the QNLI e20/r150 client-count run and updates from
+completed `round_config.json` files while the pipeline is active.
+
 ## Results
 
 Add a compact results table here once the final experiment set is regenerated from this repository.
