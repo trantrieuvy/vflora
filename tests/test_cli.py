@@ -10,7 +10,8 @@ def test_train_parser_defaults_without_ml_imports():
         ["--data-root", "data_wiz", "--output-dir", "runs/test"]
     )
 
-    assert args.variant == "nonlinear-cumulative-flora"
+    assert args.task_family == "instruction"
+    assert args.variant is None
     assert args.model == "tinyllama"
     assert args.rounds == 3
 
@@ -55,6 +56,53 @@ def test_train_parser_accepts_rolora_alias_without_ml_imports():
     assert args.distill_steps == 200
 
 
+def test_train_parser_accepts_glue_federatedllm_aliases_without_ml_imports():
+    args = build_train_parser().parse_args(
+        [
+            "--task-family",
+            "glue",
+            "--method",
+            "linear_flora_cumulative",
+            "--model",
+            "roberta",
+            "--task-name",
+            "mrpc",
+            "--data-root",
+            "data_mrpc_stratified",
+            "--output-dir",
+            "runs/test",
+            "--num_clients",
+            "10",
+            "--num_communication_rounds",
+            "5",
+            "--lora_r",
+            "8",
+            "--lora_alpha",
+            "16",
+            "--heter",
+            "True",
+            "--local_val_set_size",
+            "0.1",
+            "--max_rounds_per_invocation",
+            "2",
+            "--resume_from_latest",
+        ]
+    )
+
+    assert args.task_family == "glue"
+    assert args.method == "linear_flora_cumulative"
+    assert args.model == "roberta"
+    assert args.task_name == "mrpc"
+    assert args.num_clients == 10
+    assert args.rounds == 5
+    assert args.rank == 8
+    assert args.alpha == 16
+    assert args.heter == "True"
+    assert args.local_val_size == 0.1
+    assert args.max_rounds_per_invocation == 2
+    assert args.resume_from_latest is True
+
+
 def test_manifest_parser_smoke_rows_include_ffa():
     args = build_manifest_parser().parse_args(["--phase", "smoke"])
     rows = manifest_rows(args)
@@ -79,6 +127,31 @@ def test_split_parser_accepts_wizard_stratified_recipe():
 
     assert args.dataset == "wizard"
     assert args.mode == "stratified_keep_sizes"
+
+
+def test_split_parser_accepts_glue_underscore_aliases():
+    args = build_split_parser().parse_args(
+        [
+            "--dataset",
+            "glue",
+            "--mode",
+            "stratified",
+            "--task_name",
+            "qnli",
+            "--num_clients",
+            "10",
+            "--source_split_dir",
+            "data_qnli_stratified/10",
+            "--output_root",
+            "data_qnli_stratified",
+        ]
+    )
+
+    assert args.dataset == "glue"
+    assert args.mode == "stratified"
+    assert args.task_name == "qnli"
+    assert args.num_clients == 10
+    assert args.source_split_dir.as_posix() == "data_qnli_stratified/10"
 
 
 def test_write_round_metadata_records_variant(tmp_path):

@@ -27,6 +27,27 @@ def test_load_tuning_results_reads_vflora_run_layout(tmp_path):
     assert list(scores["Round"]) == [1, 2, 3]
     assert list(scores["Accuracy"]) == [10.0, 12.0, 13.0]
     assert set(scores["Variant key"]) == {"nonlinear-ffa"}
+    assert list(scores["Client count"]) == [10, 10, 10]
+
+
+def test_load_tuning_results_reads_legacy_flora_glue_log_path(tmp_path):
+    log_path = (
+        tmp_path
+        / "tuning-flora-mrpc_stratified-roberta-base-homo-e1-r2"
+        / "seed0"
+        / "10log.txt"
+    )
+    log_path.parent.mkdir(parents=True)
+    log_path.write_text("0.7\n0.75\n")
+
+    scores = load_tuning_results(tmp_path)
+
+    assert list(scores["Round"]) == [1, 2]
+    assert list(scores["Accuracy"]) == [70.0, 75.0]
+    assert set(scores["Variant key"]) == {"flora"}
+    assert set(scores["Dataset"]) == {"mrpc_stratified"}
+    assert set(scores["Model key"]) == {"roberta-base"}
+    assert set(scores["Client count"]) == {10}
 
 
 def test_select_plateaus_prefers_low_compute_near_best():
@@ -111,6 +132,21 @@ def test_summarize_tuning_results_adds_compute_cost(tmp_path):
     summary = summarize_tuning_results(load_tuning_results(tmp_path))
 
     assert list(summary["Compute cost"]) == [2, 4]
+
+
+def test_summarize_tuning_results_keeps_client_count_in_case_identity(tmp_path):
+    base = tmp_path / "tuning-ffa-qqp_stratified-roberta-base-homo-e1-r1" / "seed0"
+    ten_log = base / "10" / "log.txt"
+    twenty_log = base / "20" / "log.txt"
+    ten_log.parent.mkdir(parents=True)
+    twenty_log.parent.mkdir(parents=True)
+    ten_log.write_text("0.5\n")
+    twenty_log.write_text("0.8\n")
+
+    summary = summarize_tuning_results(load_tuning_results(tmp_path))
+
+    assert sorted(summary["Client count"].tolist()) == [10, 20]
+    assert sorted(summary["Mean accuracy"].tolist()) == [50.0, 80.0]
 
 
 def _summary_row(*, epochs, round_value, accuracy):

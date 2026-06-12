@@ -14,11 +14,15 @@ VARIANT_KEYS = (
     "linear-cumulative-flora",
     "nonlinear-cumulative-flora",
     "nonlinear-ffa",
+    "flora",
+    "linear_flora_cumulative",
+    "nonlinear_flora",
+    "ffa",
 )
 VARIANT_PATTERN = "|".join(re.escape(variant) for variant in VARIANT_KEYS)
 RUN_DIR_RE = re.compile(
     rf"^tuning-(?P<variant>{VARIANT_PATTERN})-(?P<dataset>.+)-"
-    r"(?P<model>tinyllama|llama-7b|gpt2)-(?P<setting>homo|heter)-"
+    r"(?P<model>tinyllama|llama-7b|gpt2|roberta-base)-(?P<setting>homo|heter)-"
     r"e(?P<epochs>\d+)-r(?P<rounds>\d+)$"
 )
 LIVE_OUTPUT_DIR_RE = re.compile(r"^output_dir=(?P<output_dir>.+)$", re.MULTILINE)
@@ -31,11 +35,16 @@ VARIANT_LABELS = {
     "linear-cumulative-flora": "Linear Cumulative FLoRA",
     "nonlinear-cumulative-flora": "Nonlinear Cumulative FLoRA",
     "nonlinear-ffa": "Nonlinear FFA",
+    "flora": "Linear FLoRA",
+    "linear_flora_cumulative": "Linear Cumulative FLoRA",
+    "nonlinear_flora": "Nonlinear Cumulative FLoRA",
+    "ffa": "Nonlinear FFA",
 }
 MODEL_LABELS = {
     "tinyllama": "TinyLlama",
     "llama-7b": "Llama-7B",
     "gpt2": "GPT-2",
+    "roberta-base": "RoBERTa-base",
 }
 SETTING_LABELS = {
     "homo": "Homo",
@@ -46,6 +55,24 @@ DATASET_LABELS = {
     "wiz_stratified": "Wizard stratified",
     "dolly": "Dolly",
     "dolly_stratified": "Dolly stratified",
+    "cola": "CoLA",
+    "cola_stratified": "CoLA stratified",
+    "mnli": "MNLI",
+    "mnli_stratified": "MNLI stratified",
+    "mrpc": "MRPC",
+    "mrpc_stratified": "MRPC stratified",
+    "qnli": "QNLI",
+    "qnli_stratified": "QNLI stratified",
+    "qqp": "QQP",
+    "qqp_stratified": "QQP stratified",
+    "rte": "RTE",
+    "rte_stratified": "RTE stratified",
+    "sst2": "SST-2",
+    "sst2_stratified": "SST-2 stratified",
+    "stsb": "STS-B",
+    "stsb_stratified": "STS-B stratified",
+    "wnli": "WNLI",
+    "wnli_stratified": "WNLI stratified",
 }
 
 
@@ -80,27 +107,26 @@ def load_tuning_results(
             seed = _parse_seed(seed_dir)
             if seed is None:
                 continue
-            score_path = _score_path(seed_dir)
-            if score_path is None:
-                continue
-            rounds = int(info["rounds"])
-            raw_scores = _read_scores(score_path)
-            if complete_only and len(raw_scores) < rounds:
-                continue
-            _append_run_record(
-                run_records,
-                variant=info["variant"],
-                dataset=info["dataset"],
-                model=info["model"],
-                setting=info["setting"],
-                epochs=int(info["epochs"]),
-                rounds=rounds,
-                seed=seed,
-                scores=raw_scores[:rounds],
-                run_dir=run_dir,
-                score_path=score_path,
-                observed_rounds=len(raw_scores),
-            )
+            for client_count, score_path in _score_paths(seed_dir):
+                rounds = int(info["rounds"])
+                raw_scores = _read_scores(score_path)
+                if complete_only and len(raw_scores) < rounds:
+                    continue
+                _append_run_record(
+                    run_records,
+                    variant=info["variant"],
+                    dataset=info["dataset"],
+                    model=info["model"],
+                    setting=info["setting"],
+                    epochs=int(info["epochs"]),
+                    rounds=rounds,
+                    seed=seed,
+                    scores=raw_scores[:rounds],
+                    run_dir=run_dir,
+                    score_path=score_path,
+                    observed_rounds=len(raw_scores),
+                    extra_fields={"Client count": client_count},
+                )
     return _records_to_scores_frame(_deduplicate_run_records(run_records))
 
 
@@ -183,6 +209,8 @@ def summarize_tuning_results(scores: pd.DataFrame) -> pd.DataFrame:
         "Local epochs",
         "Round",
     ]
+    if "Client count" in scores.columns:
+        group_columns.insert(group_columns.index("Local epochs"), "Client count")
     for optional_column in ["Result source", "Run status"]:
         if optional_column in scores.columns:
             group_columns.append(optional_column)
@@ -215,8 +243,8 @@ def select_plateaus(
     if summary.empty:
         return pd.DataFrame(), pd.DataFrame()
     data = _summary_with_compute_cost(summary)
-    epoch_columns = _epoch_group_columns()
-    case_columns = _case_group_columns()
+    epoch_columns = _epoch_group_columns(data)
+    case_columns = _case_group_columns(data)
 
     plateau_rows = []
     for group_values, group in data.groupby(epoch_columns, sort=False):
@@ -283,8 +311,8 @@ def compute_epoch_round_selection_metrics(
         return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
 
     data = _summary_with_compute_cost(summary)
-    epoch_columns = _epoch_group_columns()
-    case_columns = _case_group_columns()
+    epoch_columns = _epoch_group_columns(data)
+    case_columns = _case_group_columns(data)
     diagnostic_rows = []
     marginal_rows = []
 
@@ -443,9 +471,18 @@ def _read_scores(path: Path) -> list[float]:
     return scores
 
 
-def _score_path(seed_dir: Path) -> Path | None:
-    candidates = [seed_dir / "10" / "log.txt", seed_dir / "10log.txt"]
-    return next((path for path in candidates if path.exists()), None)
+def _score_paths(seed_dir: Path) -> list[tuple[int, Path]]:
+    paths: list[tuple[int, Path]] = []
+    for child in sorted(seed_dir.iterdir()):
+        if child.is_dir() and child.name.isdigit():
+            score_path = child / "log.txt"
+            if score_path.exists():
+                paths.append((int(child.name), score_path))
+    for legacy_path in sorted(seed_dir.glob("*log.txt")):
+        prefix = legacy_path.name.removesuffix("log.txt")
+        if prefix.isdigit():
+            paths.append((int(prefix), legacy_path))
+    return sorted(paths, key=lambda item: (item[0], str(item[1])))
 
 
 def _parse_seed(seed_dir: Path) -> int | None:
@@ -570,6 +607,7 @@ def _append_run_record(
 def _deduplicate_run_records(run_records: list[dict], include_run_dir: bool = False) -> list[dict]:
     if not run_records:
         return []
+    frame = pd.DataFrame(run_records)
     id_columns = [
         "Variant key",
         "Dataset",
@@ -578,10 +616,12 @@ def _deduplicate_run_records(run_records: list[dict], include_run_dir: bool = Fa
         "Local epochs",
         "Seed",
     ]
+    if "Client count" in frame.columns:
+        id_columns.append("Client count")
     if include_run_dir:
         id_columns.append("Run dir")
     selected = []
-    for _, group in pd.DataFrame(run_records).groupby(id_columns, sort=False):
+    for _, group in frame.groupby(id_columns, sort=False):
         sort_columns = ["Score count"]
         if "Log mtime" in group.columns:
             sort_columns.append("Log mtime")
@@ -604,6 +644,7 @@ def _records_to_scores_frame(run_records: list[dict]) -> pd.DataFrame:
         "Setting key",
         "Setting",
         "Local epochs",
+        "Client count",
         "Config rounds",
         "Seed",
         "Run dir",
@@ -620,9 +661,20 @@ def _records_to_scores_frame(run_records: list[dict]) -> pd.DataFrame:
                 {key: record[key] for key in row_keys if key in record}
                 | {"Round": round_idx, "Accuracy": float(accuracy)}
             )
-    return pd.DataFrame(rows).sort_values(
-        ["Dataset", "Variant key", "Model key", "Setting key", "Local epochs", "Seed", "Round"]
-    )
+    if not rows:
+        return _empty_scores_frame()
+    sort_columns = [
+        "Dataset",
+        "Variant key",
+        "Model key",
+        "Setting key",
+        "Client count",
+        "Local epochs",
+        "Seed",
+        "Round",
+    ]
+    frame = pd.DataFrame(rows)
+    return frame.sort_values([column for column in sort_columns if column in frame.columns])
 
 
 def _future_gain(curve: pd.DataFrame, round_value: int) -> float:
@@ -640,8 +692,8 @@ def _summary_with_compute_cost(summary: pd.DataFrame) -> pd.DataFrame:
     return data
 
 
-def _case_group_columns() -> list[str]:
-    return [
+def _case_group_columns(data: pd.DataFrame | None = None) -> list[str]:
+    columns = [
         "Variant key",
         "Variant",
         "Dataset",
@@ -651,10 +703,13 @@ def _case_group_columns() -> list[str]:
         "Setting key",
         "Setting",
     ]
+    if data is not None and "Client count" in data.columns:
+        columns.append("Client count")
+    return columns
 
 
-def _epoch_group_columns() -> list[str]:
-    return _case_group_columns() + ["Local epochs"]
+def _epoch_group_columns(data: pd.DataFrame | None = None) -> list[str]:
+    return _case_group_columns(data) + ["Local epochs"]
 
 
 def _empty_scores_frame() -> pd.DataFrame:
@@ -669,6 +724,7 @@ def _empty_scores_frame() -> pd.DataFrame:
             "Setting key",
             "Setting",
             "Local epochs",
+            "Client count",
             "Config rounds",
             "Seed",
             "Round",

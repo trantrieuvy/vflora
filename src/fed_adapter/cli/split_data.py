@@ -10,16 +10,19 @@ from fed_adapter.data.splits import SplitRequest, create_split
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Generate federated client data splits.")
-    parser.add_argument("--dataset", choices=("dolly", "wizard"), required=True)
-    parser.add_argument("--mode", choices=("dirichlet", "stratified_keep_sizes"), required=True)
-    parser.add_argument("--num-clients", "--num-client", type=int, default=10)
-    parser.add_argument("--output-root", type=Path, required=True)
-    parser.add_argument("--source-root", type=Path)
-    parser.add_argument("--dataset-path", type=Path)
+    parser.add_argument("--dataset", choices=("dolly", "wizard", "glue"), required=True)
+    parser.add_argument("--mode", choices=("dirichlet", "stratified_keep_sizes", "stratified", "iid"), required=True)
+    parser.add_argument("--num-clients", "--num-client", "--num_clients", type=int, default=10)
+    parser.add_argument("--output-root", "--output_root", type=Path, required=True)
+    parser.add_argument("--source-root", "--source_root", type=Path)
+    parser.add_argument("--source-split-dir", "--source_split_dir", type=Path)
+    parser.add_argument("--dataset-path", "--dataset_path", type=Path)
+    parser.add_argument("--task-name", "--task_name")
     parser.add_argument("--alpha", type=float, default=0.5)
     parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--test-per-category", type=int, default=10)
-    parser.add_argument("--num-length-buckets", type=int, default=5)
+    parser.add_argument("--test-per-category", "--test_per_category", type=int, default=10)
+    parser.add_argument("--num-length-buckets", "--num_length_buckets", type=int, default=5)
+    parser.add_argument("--stsb-num-label-buckets", "--stsb_num_label_buckets", type=int, default=10)
     return parser
 
 
@@ -32,11 +35,14 @@ def main(argv: list[str] | None = None) -> None:
             num_clients=args.num_clients,
             output_root=args.output_root,
             source_root=args.source_root,
+            source_split_dir=args.source_split_dir,
             dataset_path=args.dataset_path,
+            task_name=args.task_name,
             alpha=args.alpha,
             seed=args.seed,
             test_per_category=args.test_per_category,
             num_length_buckets=args.num_length_buckets,
+            stsb_num_label_buckets=args.stsb_num_label_buckets,
         )
     )
     print(f"Wrote {args.dataset} split to {output_dir}")
@@ -44,4 +50,3 @@ def main(argv: list[str] | None = None) -> None:
 
 if __name__ == "__main__":
     main()
-

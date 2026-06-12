@@ -1,4 +1,9 @@
-from fed_adapter.data.splits import build_stratified_clients, wizard_stratification_labels
+from fed_adapter.data.splits import (
+    SplitRequest,
+    build_stratified_clients,
+    create_split,
+    wizard_stratification_labels,
+)
 
 
 def test_build_stratified_clients_preserves_quotas():
@@ -37,8 +42,6 @@ def test_wizard_stratification_labels_include_family_and_bucket():
 def test_missing_source_split_error_explains_relative_paths(tmp_path):
     import pytest
 
-    from fed_adapter.data.splits import SplitRequest, create_split
-
     with pytest.raises(FileNotFoundError) as exc_info:
         create_split(
             SplitRequest(
@@ -55,3 +58,90 @@ def test_missing_source_split_error_explains_relative_paths(tmp_path):
     assert "Current working directory" in message
     assert "absolute --source-root" in message
     assert "local_training_0.json" in message
+
+
+def test_glue_source_split_rewrites_mnli_with_mismatched_validation(tmp_path):
+    import json
+
+    source = tmp_path / "source_mnli"
+    source.mkdir()
+    (source / "local_training_0.json").write_text(
+        json.dumps(
+            [
+                {"premise": "p0", "hypothesis": "h0", "label": 0},
+                {"premise": "p1", "hypothesis": "h1", "label": 1},
+                {"premise": "p2", "hypothesis": "h2", "label": 2},
+            ]
+        )
+    )
+    (source / "local_training_1.json").write_text(
+        json.dumps(
+            [
+                {"premise": "p3", "hypothesis": "h3", "label": 0},
+                {"premise": "p4", "hypothesis": "h4", "label": 1},
+                {"premise": "p5", "hypothesis": "h5", "label": 2},
+            ]
+        )
+    )
+    (source / "global_val.json").write_text(
+        json.dumps([{"premise": "pm", "hypothesis": "hm", "label": 1}])
+    )
+    (source / "global_val_mismatched.json").write_text(
+        json.dumps([{"premise": "px", "hypothesis": "hx", "label": 2}])
+    )
+
+    output_dir = create_split(
+        SplitRequest(
+            dataset="glue",
+            mode="stratified",
+            task_name="mnli",
+            num_clients=2,
+            source_split_dir=source,
+            output_root=tmp_path / "data_mnli_stratified",
+            seed=0,
+        )
+    )
+
+    assert output_dir == tmp_path / "data_mnli_stratified" / "2"
+    assert (output_dir / "global_val.json").exists()
+    assert (output_dir / "global_val_mismatched.json").exists()
+    assert len(json.loads((output_dir / "local_training_0.json").read_text())) == 3
+    assert len(json.loads((output_dir / "local_training_1.json").read_text())) == 3
+    metadata = json.loads((output_dir / "split_metadata.json").read_text())
+    assert metadata["task_name"] == "mnli"
+    assert metadata["extra_validation_sizes"] == {"global_val_mismatched.json": 1}
+
+
+def test_glue_stsb_stratification_uses_score_buckets(tmp_path):
+    import json
+
+    source = tmp_path / "source_stsb"
+    source.mkdir()
+    records = [
+        {"sentence1": f"a{i}", "sentence2": f"b{i}", "label": float(i)}
+        for i in range(6)
+    ]
+    (source / "local_training_0.json").write_text(json.dumps(records[:3]))
+    (source / "local_training_1.json").write_text(json.dumps(records[3:]))
+    (source / "global_val.json").write_text(json.dumps(records[:2]))
+
+    output_dir = create_split(
+        SplitRequest(
+            dataset="glue",
+            mode="stratified",
+            task_name="stsb",
+            num_clients=2,
+            source_split_dir=source,
+            output_root=tmp_path / "data_stsb_stratified",
+            stsb_num_label_buckets=3,
+            seed=1,
+        )
+    )
+
+    metadata = json.loads((output_dir / "split_metadata.json").read_text())
+    assert sorted(metadata["train_label_counts"]) == ["score_q0", "score_q1", "score_q2"]
+    assert all(
+        label in {"score_q0", "score_q1", "score_q2"}
+        for counts in metadata["client_label_counts"].values()
+        for label in counts
+    )

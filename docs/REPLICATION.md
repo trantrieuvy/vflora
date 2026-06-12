@@ -1,11 +1,14 @@
 # Replicating V-FLoRA Variant Results
 
-This repo ports reusable pieces from the working `FederatedLLM` experiment archive into a cleaner standalone implementation. The supported core LLM paths are:
+This repo ports reusable pieces from the working `FederatedLLM` experiment archive into a cleaner standalone implementation. The supported core paths are:
 
 - model: `tinyllama`
 - dataset: WizardLM-style client JSON files
 - variants: linear cumulative FLoRA, nonlinear cumulative FLoRA, nonlinear FFA, and nonlinear RoLoRA
 - aggregation: stacked residual adapters for FLoRA variants; B-only averaging for FFA
+- model: `roberta-base`
+- dataset: GLUE client JSON files
+- variants: normal linear FLoRA, linear cumulative FLoRA, nonlinear cumulative FLoRA, and FFA
 
 ## Environment
 
@@ -46,6 +49,20 @@ python -m fed_adapter.cli.split_data \
   --source-root data_wiz \
   --output-root data_wiz_stratified
 ```
+
+For GLUE/RoBERTa runs, create task-specific splits with the same data CLI:
+
+```bash
+python -m fed_adapter.cli.split_data \
+  --dataset glue \
+  --task-name mrpc \
+  --mode stratified \
+  --num-clients 10 \
+  --output-root data_mrpc_stratified \
+  --seed 0
+```
+
+MNLI writes `global_val.json` from `validation_matched` and `global_val_mismatched.json` from `validation_mismatched`.
 
 ## Nonlinear FLoRA
 
@@ -126,6 +143,63 @@ For `nonlinear-rolora`, each round writes the compressed shared adapter to
 `--save-distill-teacher` is provided.
 
 If `--eval-path` is provided, `log.txt` contains one score per communication round.
+
+## GLUE/RoBERTa
+
+Use the unified training CLI with `--task-family glue`. `--method` is accepted as a FederatedLLM-compatible alias for `--variant`.
+
+```bash
+python -m fed_adapter.cli.train \
+  --task-family glue \
+  --method flora \
+  --model roberta-base \
+  --task-name mrpc \
+  --data-root data_mrpc_stratified \
+  --output-dir runs/roberta-mrpc-flora/seed0 \
+  --num-clients 10 \
+  --rounds 20 \
+  --rank 4 \
+  --alpha 4 \
+  --local-epochs 1 \
+  --local-batch-size 32 \
+  --micro-batch-size 16 \
+  --learning-rate 5e-4 \
+  --seed 0
+```
+
+Supported GLUE method names are:
+
+```text
+flora
+linear_flora_cumulative
+nonlinear_flora
+ffa
+```
+
+The GLUE trainer writes `server_state.pt` and supports segmented resume:
+
+```bash
+python -m fed_adapter.cli.train \
+  --task-family glue \
+  --method flora \
+  --model roberta-base \
+  --task-name qnli \
+  --data-root data_qnli_stratified \
+  --output-dir runs/roberta-qnli-flora/seed0 \
+  --num-clients 10 \
+  --rounds 150 \
+  --rank 4 \
+  --alpha 4 \
+  --local-epochs 20 \
+  --max-rounds-per-invocation 10 \
+  --retain-adapter-every-n-rounds 10 \
+  --resume-from-latest \
+  --seed 0
+```
+
+Do not pass `--resume-from-latest` for the first segment unless `server_state.pt` already exists.
+
+Primary GLUE scores follow the experiment reporting rule: MNLI overall matched/mismatched accuracy, CoLA Matthew's correlation, STS-B Pearson correlation, and accuracy for all other tasks. MRPC and QQP therefore use accuracy as the score written to `log.txt`; their F1 and combined scores are retained in each round's `round_config.json`.
 
 
 ## SLURM

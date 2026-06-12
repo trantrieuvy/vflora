@@ -14,6 +14,18 @@ from typing import Iterable
 
 MIN_DIRICHLET_CLIENT_SIZE = 40
 
+GLUE_TASK_TO_KEYS = {
+    "cola": ("sentence", None),
+    "mnli": ("premise", "hypothesis"),
+    "mrpc": ("sentence1", "sentence2"),
+    "qnli": ("question", "sentence"),
+    "qqp": ("question1", "question2"),
+    "rte": ("sentence1", "sentence2"),
+    "sst2": ("sentence", None),
+    "stsb": ("sentence1", "sentence2"),
+    "wnli": ("sentence1", "sentence2"),
+}
+
 
 @dataclass(frozen=True)
 class SplitRequest:
@@ -22,15 +34,20 @@ class SplitRequest:
     num_clients: int
     output_root: Path
     source_root: Path | None = None
+    source_split_dir: Path | None = None
     dataset_path: Path | None = None
+    task_name: str | None = None
     alpha: float = 0.5
     seed: int = 42
     test_per_category: int = 10
     num_length_buckets: int = 5
+    stsb_num_label_buckets: int = 10
 
 
 def create_split(request: SplitRequest) -> Path:
     random.seed(request.seed)
+    if request.dataset == "glue":
+        return create_glue_split(request)
     if request.mode == "dirichlet":
         return create_dolly_dirichlet_split(request)
     if request.mode == "stratified_keep_sizes":
@@ -39,6 +56,62 @@ def create_split(request: SplitRequest) -> Path:
         if request.dataset == "wizard":
             return create_wizard_stratified_split(request)
     raise ValueError(f"Unsupported split request: {request.dataset}/{request.mode}")
+
+
+def create_glue_split(request: SplitRequest) -> Path:
+    """Create a FederatedLLM-compatible split for a GLUE task."""
+    if request.mode not in {"iid", "stratified"}:
+        raise ValueError("GLUE splitting supports mode='iid' or mode='stratified'")
+    task_name = (request.task_name or "").lower()
+    if task_name not in GLUE_TASK_TO_KEYS:
+        raise ValueError(f"Unsupported GLUE task: {task_name!r}")
+
+    sentence1_key, sentence2_key = GLUE_TASK_TO_KEYS[task_name]
+    train_records, validation_records, extra_validation_records = _load_glue_records(
+        request,
+        task_name,
+        sentence1_key,
+        sentence2_key,
+    )
+    rng = random.Random(request.seed)
+    if request.mode == "iid":
+        client_records = _split_iid(train_records, request.num_clients, rng)
+        label_counts = {
+            client_id: _counts(_glue_record_label(record, task_name) for record in records)
+            for client_id, records in enumerate(client_records)
+        }
+    else:
+        labels = _glue_stratification_labels(
+            train_records,
+            task_name,
+            num_stsb_buckets=request.stsb_num_label_buckets,
+        )
+        client_records, label_counts = _split_round_robin_by_label(train_records, labels, request.num_clients, rng)
+
+    output_dir = _make_output_dir(request.output_root, request.num_clients)
+    _write_json(output_dir / "global_val.json", validation_records)
+    for split_name, records in extra_validation_records.items():
+        _write_json(output_dir / split_name, records)
+    for client_id, records in enumerate(client_records):
+        _write_json(output_dir / f"local_training_{client_id}.json", records)
+
+    metadata = {
+        "dataset": "glue",
+        "task_name": task_name,
+        "split_mode": request.mode,
+        "seed": int(request.seed),
+        "num_clients": int(request.num_clients),
+        "train_size": len(train_records),
+        "validation_size": len(validation_records),
+        "extra_validation_sizes": {name: len(records) for name, records in extra_validation_records.items()},
+        "train_label_counts": _counts(_glue_stratification_labels(train_records, task_name, request.stsb_num_label_buckets)),
+        "validation_label_counts": _counts(_glue_stratification_labels(validation_records, task_name, request.stsb_num_label_buckets)),
+        "source_split_dir": str(request.source_split_dir) if request.source_split_dir is not None else None,
+        "client_sizes": {client_id: len(records) for client_id, records in enumerate(client_records)},
+        "client_label_counts": {str(client_id): counts for client_id, counts in label_counts.items()},
+    }
+    _write_json(output_dir / "split_metadata.json", metadata)
+    return output_dir
 
 
 def create_dolly_dirichlet_split(request: SplitRequest) -> Path:
@@ -170,6 +243,161 @@ def create_wizard_stratified_split(request: SplitRequest) -> Path:
         },
     )
     return output_dir
+
+
+def _load_glue_records(
+    request: SplitRequest,
+    task_name: str,
+    sentence1_key: str,
+    sentence2_key: str | None,
+) -> tuple[list[dict], list[dict], dict[str, list[dict]]]:
+    if request.source_split_dir is not None:
+        source_paths = sorted(
+            request.source_split_dir.glob("local_training_*.json"),
+            key=lambda path: int(path.stem.rsplit("_", 1)[-1]),
+        )
+        if not source_paths:
+            raise FileNotFoundError(f"No local training records found in {request.source_split_dir}")
+        train_records: list[dict] = []
+        for source_path in source_paths:
+            train_records.extend(_read_json(source_path))
+        validation_records = _read_json(request.source_split_dir / "global_val.json")
+        extra_validation_records = {}
+        mismatched_path = request.source_split_dir / "global_val_mismatched.json"
+        if mismatched_path.exists():
+            extra_validation_records["global_val_mismatched.json"] = _read_json(mismatched_path)
+        return train_records, validation_records, extra_validation_records
+
+    try:
+        from datasets import load_dataset
+    except ImportError as exc:
+        raise RuntimeError("GLUE splitting requires datasets") from exc
+
+    dataset = load_dataset("glue", task_name)
+    train_records = _project_glue_records(
+        dataset["train"],
+        sentence1_key,
+        sentence2_key,
+        task_name,
+    )
+    validation_split = "validation_matched" if task_name == "mnli" else "validation"
+    validation_records = _project_glue_records(
+        dataset[validation_split],
+        sentence1_key,
+        sentence2_key,
+        task_name,
+    )
+    extra_validation_records = {}
+    if task_name == "mnli":
+        extra_validation_records["global_val_mismatched.json"] = _project_glue_records(
+            dataset["validation_mismatched"],
+            sentence1_key,
+            sentence2_key,
+            task_name,
+        )
+    return train_records, validation_records, extra_validation_records
+
+
+def _project_glue_records(
+    records,
+    sentence1_key: str,
+    sentence2_key: str | None,
+    task_name: str,
+) -> list[dict]:
+    projected = []
+    for record in records:
+        label = record["label"]
+        if label is None or float(label) < 0:
+            continue
+        item = {
+            sentence1_key: record[sentence1_key],
+            "label": float(label) if task_name == "stsb" else int(label),
+        }
+        if sentence2_key is not None:
+            item[sentence2_key] = record[sentence2_key]
+        projected.append(item)
+    return projected
+
+
+def _split_iid(records: list[dict], num_clients: int, rng: random.Random) -> list[list[dict]]:
+    shuffled = records[:]
+    rng.shuffle(shuffled)
+    clients = [[] for _ in range(num_clients)]
+    for index, record in enumerate(shuffled):
+        clients[index % num_clients].append(record)
+    return clients
+
+
+def _split_round_robin_by_label(
+    records: list[dict],
+    labels: list[str],
+    num_clients: int,
+    rng: random.Random,
+) -> tuple[list[list[dict]], dict[int, dict[str, int]]]:
+    if len(records) != len(labels):
+        raise ValueError("records and labels must have the same length")
+    by_label: dict[str, list[dict]] = defaultdict(list)
+    for record, label in zip(records, labels):
+        by_label[label].append(record)
+
+    clients = [[] for _ in range(num_clients)]
+    label_counts = {client_id: {} for client_id in range(num_clients)}
+    for label in sorted(by_label):
+        label_records = by_label[label]
+        rng.shuffle(label_records)
+        for index, record in enumerate(label_records):
+            client_id = index % num_clients
+            clients[client_id].append(record)
+            label_counts[client_id][label] = label_counts[client_id].get(label, 0) + 1
+    for records_for_client in clients:
+        rng.shuffle(records_for_client)
+    return clients, label_counts
+
+
+def _glue_record_label(record: dict, task_name: str) -> str:
+    label = record.get("label")
+    if task_name == "stsb":
+        return f"{float(label):.6g}"
+    return str(int(label))
+
+
+def _glue_stratification_labels(
+    records: Iterable[dict],
+    task_name: str,
+    num_stsb_buckets: int,
+) -> list[str]:
+    records = list(records)
+    if task_name != "stsb":
+        return [_glue_record_label(record, task_name) for record in records]
+    values = [float(record["label"]) for record in records]
+    edges = _quantile_edges_float(values, num_stsb_buckets)
+    return [f"score_q{_bucket_for_float(value, edges)}" for value in values]
+
+
+def _quantile_edges_float(values: list[float], num_buckets: int) -> list[float]:
+    if num_buckets < 1:
+        raise ValueError("stsb_num_label_buckets must be at least 1")
+    if num_buckets == 1 or not values:
+        return []
+    sorted_values = sorted(values)
+    edges = []
+    for index in range(1, num_buckets):
+        position = (index / num_buckets) * (len(sorted_values) - 1)
+        lower = math.floor(position)
+        upper = math.ceil(position)
+        if lower == upper:
+            edges.append(float(sorted_values[lower]))
+        else:
+            fraction = position - lower
+            edges.append(float(sorted_values[lower] + (sorted_values[upper] - sorted_values[lower]) * fraction))
+    return sorted(set(edges))
+
+
+def _bucket_for_float(value: float, edges: list[float]) -> int:
+    for bucket, edge in enumerate(edges):
+        if value <= edge:
+            return bucket
+    return len(edges)
 
 
 def build_stratified_clients(
@@ -430,4 +658,3 @@ def _require_pandas():
     except ImportError as exc:
         raise RuntimeError("Dolly dirichlet splitting requires pandas") from exc
     return pd
-

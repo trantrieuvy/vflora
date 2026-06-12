@@ -58,6 +58,12 @@ The manifest format is tab-separated:
 variant dataset model setting epochs rounds seed
 ```
 
+FederatedLLM-style manifests are also accepted. They may use `method` as the first header and include extra columns:
+
+```text
+method dataset model setting epochs rounds seed num_clients lora_r lora_alpha local_val_set_size local_train_monitor_size
+```
+
 Example manifest:
 
 ```text
@@ -97,6 +103,26 @@ Dry-run without launching Python training:
 DRY_RUN=true bash scripts/run_epoch_round_tuning.slurm
 ```
 
+For GLUE/RoBERTa rows, set `model` to `roberta` or `roberta-base`. The launcher dispatches to:
+
+```bash
+python -m fed_adapter.cli.train --task-family glue
+```
+
+Accepted GLUE methods in manifests are `flora`, `linear_flora_cumulative`, `nonlinear_flora`, and `ffa`. For `flora`, the completion check uses the legacy FederatedLLM score path `seedX/10log.txt`; other methods use `seedX/10/log.txt`.
+
+Useful GLUE segmentation overrides:
+
+```bash
+ROBERTA_MAX_ROUNDS_PER_INVOCATION=10 \
+ROBERTA_RETAIN_ADAPTER_EVERY_N_ROUNDS=10 \
+ROBERTA_RESUME_FROM_LATEST=true \
+MANIFEST=tuning_manifests/roberta_qnli.tsv \
+sbatch --array=1-20 scripts/run_epoch_round_tuning.slurm
+```
+
+Leave `ROBERTA_RESUME_FROM_LATEST=false` for first segments that do not already have `server_state.pt`.
+
 ## Required Data Layout
 
 The scripts expect data roots like:
@@ -115,10 +141,22 @@ data_wiz_stratified/10/local_training_0.json
 data_wiz_stratified/10/local_training_9.json
 ```
 
+For a GLUE row such as `dataset=qnli_stratified`, the runner expects:
+
+```text
+data_qnli_stratified/10/local_training_0.json
+...
+data_qnli_stratified/10/local_training_9.json
+data_qnli_stratified/10/global_val.json
+```
+
+For MNLI, `global_val_mismatched.json` is used when present.
+
 See `docs/DATA.md` for dataset setup.
 
 ## Notes
 
-- `linear-cumulative-flora`, `nonlinear-cumulative-flora`, and `nonlinear-ffa` are supported by the current training CLI.
+- Instruction rows support `linear-cumulative-flora`, `nonlinear-cumulative-flora`, `nonlinear-ffa`, and `nonlinear-rolora`.
+- GLUE rows support `flora`, `linear_flora_cumulative`, `nonlinear_flora`, and `ffa`.
 - The scripts skip completed runs if the expected `log.txt` exists, unless `FORCE=true` is set.
 - Outputs are written under `runs/` by default, which is ignored by Git.

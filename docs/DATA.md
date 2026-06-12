@@ -108,9 +108,72 @@ python -m fed_adapter.cli.split_data \
   --seed 42
 ```
 
+## GLUE Tasks
+
+GLUE splits are generated directly from the Hugging Face `glue` dataset unless `--source-split-dir` is provided. Supported task names are:
+
+```text
+cola mnli mrpc qnli qqp rte sst2 stsb wnli
+```
+
+Create a stratified QNLI split:
+
+```bash
+python -m fed_adapter.cli.split_data \
+  --dataset glue \
+  --task-name qnli \
+  --mode stratified \
+  --num-clients 10 \
+  --output-root data_qnli_stratified \
+  --seed 0
+```
+
+Create an IID MRPC split:
+
+```bash
+python -m fed_adapter.cli.split_data \
+  --dataset glue \
+  --task-name mrpc \
+  --mode iid \
+  --num-clients 10 \
+  --output-root data_mrpc \
+  --seed 0
+```
+
+The output layout matches the FederatedLLM GLUE runner:
+
+```text
+data_qnli_stratified/10/local_training_0.json
+...
+data_qnli_stratified/10/local_training_9.json
+data_qnli_stratified/10/global_val.json
+data_qnli_stratified/10/split_metadata.json
+```
+
+For MNLI, `global_val.json` is the matched validation split and the splitter also writes:
+
+```text
+data_mnli_stratified/10/global_val_mismatched.json
+```
+
+To recreate a split from an existing FederatedLLM-style directory while changing client count or mode, pass the existing directory:
+
+```bash
+python -m fed_adapter.cli.split_data \
+  --dataset glue \
+  --task-name qnli \
+  --mode stratified \
+  --num-clients 3 \
+  --source-split-dir data_qnli_stratified/10 \
+  --output-root data_qnli_stratified \
+  --seed 0
+```
+
+For STS-B stratified splitting, continuous scores are assigned to quantile buckets before round-robin allocation. Adjust the bucket count with `--stsb-num-label-buckets` when needed.
+
 ## Notes
 
-- `data_wiz/`, `data_wiz_stratified/`, `data_dolly/`, and `data_dolly_stratified/` are ignored by Git.
+- `data_wiz/`, `data_wiz_stratified/`, `data_dolly/`, `data_dolly_stratified/`, and `data_<glue_task>*/` are ignored by Git.
 - `stratified_keep_sizes` always requires an existing source split.
 - For WizardLM, the source split comes from FederatedLLM's pre-generated `data_wiz/10` files.
 - For Dolly, the source split can be generated from raw Dolly with `--mode dirichlet`.

@@ -6,7 +6,7 @@ V-FLoRA is organized around one question:
 
 The experiments compare three axes:
 
-- **Adapter variant:** linear cumulative FLoRA, nonlinear cumulative FLoRA, nonlinear FFA, nonlinear RoLoRA, and future LayerCraft adapter variants.
+- **Adapter variant:** normal linear FLoRA, linear cumulative FLoRA, nonlinear cumulative FLoRA, nonlinear FFA, nonlinear RoLoRA, and future LayerCraft adapter variants.
 - **Data strategy:** non-IID Dirichlet splits versus stratified client-preserving splits.
 - **Training schedule:** local epoch count versus communication-round budget.
 
@@ -33,6 +33,22 @@ flowchart LR
 ```
 
 Only adapter parameters are trained or aggregated. The base model remains frozen.
+
+## Normal Linear FLoRA
+
+CLI method name for GLUE/RoBERTa:
+
+```text
+flora
+```
+
+Normal linear FLoRA trains a fresh linear LoRA residual on each selected client, stacks the selected client adapters at the server, and immediately merges the resulting linear delta into the frozen backbone weights:
+
+$$
+W_{t+1} = W_t + s B^{(t)} A^{(t)}
+$$
+
+This is different from linear cumulative FLoRA. Normal FLoRA does not keep an explicit cumulative adapter during subsequent rounds; the accumulated effect lives in the model weights. The helper code for this method lives in `adapters/flora.py`, while the reusable residual LoRA layer remains in `adapters/residual.py`.
 
 ## Linear Cumulative FLoRA
 

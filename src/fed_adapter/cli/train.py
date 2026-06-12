@@ -37,42 +37,57 @@ VARIANT_ALIASES = {
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run V-FLoRA federated adapter training.")
+    parser.add_argument("--task-family", choices=("instruction", "glue"), default="instruction")
     parser.add_argument(
         "--variant",
-        choices=tuple(VARIANT_ALIASES),
-        default="nonlinear-cumulative-flora",
+        default=None,
         help=(
             "Federated adapter method. Short aliases 'nonlinear', "
             "'cumulative-linear', 'ffa', and 'rolora' are kept for compatibility."
         ),
     )
+    parser.add_argument("--method", help="Compatibility alias for --variant, used by FederatedLLM manifests.")
     parser.add_argument("--model", default="tinyllama")
+    parser.add_argument("--task-name")
     parser.add_argument("--data-root", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--eval-path", type=Path)
     parser.add_argument("--calibration-path", type=Path)
-    parser.add_argument("--num-clients", type=int, default=10)
-    parser.add_argument("--rounds", type=int, default=3)
+    parser.add_argument("--num-clients", "--num_clients", type=int, default=10)
+    parser.add_argument("--rounds", "--num-communication-rounds", "--num_communication_rounds", type=int, default=3)
     parser.add_argument("--client-fraction", type=float, default=1.0)
-    parser.add_argument("--rank", type=int, default=16)
-    parser.add_argument("--alpha", type=float, default=32)
-    parser.add_argument("--dropout", type=float, default=0.05)
+    parser.add_argument("--rank", "--lora-r", "--lora_r", type=int, default=16)
+    parser.add_argument("--alpha", "--lora-alpha", "--lora_alpha", type=float, default=32)
+    parser.add_argument("--dropout", "--lora-dropout", "--lora_dropout", type=float, default=0.05)
     parser.add_argument("--activation", default="gelu", help="Hidden activation for nonlinear FFA/RoLoRA.")
     parser.add_argument("--a-init-std", type=float, default=0.02, help="Seeded A initialization std for nonlinear FFA/RoLoRA.")
-    parser.add_argument("--target-modules", default="q_proj,v_proj")
+    parser.add_argument("--target-modules", "--lora-target-modules", "--lora_target_modules")
     parser.add_argument("--heterogeneous", action="store_true")
+    parser.add_argument("--heter")
     parser.add_argument("--local-ranks", default="64,32,16,16,8,8,4,4,4,4")
-    parser.add_argument("--local-batch-size", type=int, default=128)
-    parser.add_argument("--micro-batch-size", type=int, default=16)
-    parser.add_argument("--local-epochs", type=int, default=1)
-    parser.add_argument("--learning-rate", type=float, default=3e-4)
-    parser.add_argument("--local-val-size", type=int, default=0)
+    parser.add_argument("--local-batch-size", "--local_batch_size", type=int, default=128)
+    parser.add_argument("--micro-batch-size", "--local-micro-batch-size", "--local_micro_batch_size", type=int, default=16)
+    parser.add_argument("--local-epochs", "--local-num-epochs", "--local_num_epochs", type=int, default=1)
+    parser.add_argument("--learning-rate", "--local-learning-rate", "--local_learning_rate", type=float, default=3e-4)
+    parser.add_argument("--local-val-size", "--local-val-set-size", "--local_val_set_size", type=float, default=0)
+    parser.add_argument("--local-train-monitor-size", "--local_train_monitor_size", type=int, default=0)
+    parser.add_argument("--local-validation-source", "--local_validation_source", default="local_holdout")
     parser.add_argument("--cutoff-len", type=int, default=512)
+    parser.add_argument("--max-seq-length", "--max_seq_length", dest="cutoff_len", type=int, default=argparse.SUPPRESS)
     parser.add_argument("--prompt-template", default="alpaca")
     parser.add_argument("--train-on-inputs", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--torch-dtype", choices=("float32", "bfloat16", "float16"), default="bfloat16")
+    parser.add_argument("--fp16", action="store_true")
+    parser.add_argument("--bf16", action="store_true")
+    parser.add_argument("--warmup-ratio", "--warmup_ratio", type=float, default=0.06)
+    parser.add_argument("--weight-decay", "--weight_decay", type=float, default=0.1)
+    parser.add_argument("--eval-batch-size", "--eval_batch_size", type=int, default=64)
+    parser.add_argument("--use-deterministic-algorithms", "--use_deterministic_algorithms", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--resume-from-latest", "--resume_from_latest", action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument("--max-rounds-per-invocation", "--max_rounds_per_invocation", type=int, default=0)
+    parser.add_argument("--retain-adapter-every-n-rounds", "--retain_adapter_every_n_rounds", type=int, default=1)
     parser.add_argument("--keep-local-checkpoints", action="store_true")
     parser.add_argument("--distill-calibration-size", type=int, default=512)
     parser.add_argument("--distill-max-tokens", type=int, default=8192)
@@ -88,7 +103,27 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> None:
     args = build_parser().parse_args(argv)
+    if _legacy_bool(args.heter):
+        args.heterogeneous = True
+    if args.task_family == "glue":
+        from fed_adapter.cli.train_glue import train as train_glue
+
+        train_glue(args)
+        return
     train(args)
+
+
+def _legacy_bool(value) -> bool:
+    if value is None:
+        return False
+    if isinstance(value, bool):
+        return value
+    lowered = str(value).strip().lower()
+    if lowered in {"true", "1", "yes", "y"}:
+        return True
+    if lowered in {"false", "0", "no", "n", ""}:
+        return False
+    raise ValueError(f"Expected a boolean value, got {value!r}")
 
 
 def train(args: argparse.Namespace) -> None:
@@ -131,7 +166,7 @@ def train(args: argparse.Namespace) -> None:
     if not data_dir.exists():
         raise FileNotFoundError(f"Missing client data directory: {data_dir}")
 
-    target_modules = [item.strip() for item in args.target_modules.split(",") if item.strip()]
+    target_modules = [item.strip() for item in (args.target_modules or "q_proj,v_proj").split(",") if item.strip()]
     local_ranks = [int(item) for item in args.local_ranks.split(",") if item.strip()]
     if args.heterogeneous and len(local_ranks) < args.num_clients:
         raise ValueError("--local-ranks must provide at least one rank per client")
@@ -162,7 +197,8 @@ def train(args: argparse.Namespace) -> None:
     frozen_B = None
     frozen_scaling = args.alpha / args.rank
     accuracies: list[float] = []
-    variant = VARIANT_ALIASES[args.variant]
+    variant_name = args.method or args.variant or "nonlinear-cumulative-flora"
+    variant = VARIANT_ALIASES[variant_name]
     _validate_train_args(args, variant)
     ffa = variant == "nonlinear-ffa"
     rolora = variant == "nonlinear-rolora"
