@@ -55,20 +55,28 @@ See `docs/METHODS.md` for formulas and Mermaid diagrams showing client updates, 
 
 ## Installation
 
-For local development:
+V-FLoRA is intended to run from its own Conda environment, separate from the
+FederatedLLM `flora` environment:
 
 ```bash
-python -m venv .venv
-.venv\Scripts\activate
-pip install pytest
-pip install -e .
+conda create -n vflora python=3.10
+conda activate vflora
+python -m pip install --upgrade pip
+pip install -r requirements.txt
+pip install -e . --no-build-isolation
 ```
 
-For training:
+The same environment can also be created from `environment.yml`:
 
 ```bash
-pip install -r requirements-train.txt
+conda env create -f environment.yml
+conda activate vflora
+pip install -e . --no-build-isolation
 ```
+
+`--no-build-isolation` keeps the editable install on the already-created
+cluster environment instead of asking pip to download build dependencies into a
+temporary isolated environment.
 
 LayerCraft is not required for the current direct implementations of `linear-cumulative-flora`, `nonlinear-cumulative-flora`, `nonlinear-ffa`, and `nonlinear-rolora`. It will be used as an optional backend for LayerCraft adapter-variant experiments:
 

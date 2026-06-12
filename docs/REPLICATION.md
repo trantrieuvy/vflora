@@ -15,8 +15,9 @@ This repo ports reusable pieces from the working `FederatedLLM` experiment archi
 ```bash
 conda create -n vflora python=3.10
 conda activate vflora
-pip install -e .
-pip install -r requirements-train.txt
+python -m pip install --upgrade pip
+pip install -r requirements.txt
+pip install -e . --no-build-isolation
 ```
 
 If the model requires Hugging Face authentication, set:

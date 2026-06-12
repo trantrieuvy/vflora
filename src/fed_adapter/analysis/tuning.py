@@ -83,7 +83,7 @@ class _PandasProxy:
         except ImportError as exc:
             raise RuntimeError(
                 "Tuning analysis requires pandas. Install the training requirements "
-                "with `pip install -r requirements-train.txt`."
+                "with `pip install -r requirements.txt`."
             ) from exc
         globals()["pd"] = pandas_module
         return getattr(pandas_module, name)

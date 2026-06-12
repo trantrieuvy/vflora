@@ -18,4 +18,6 @@ checkpoint-*/
 */checkpoint-*/
 outputs/
 runs/
+!references/runs/
+!references/runs/*.md
 results/raw/

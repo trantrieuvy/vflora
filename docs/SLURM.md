@@ -138,7 +138,7 @@ is now:
 
 ```bash
 module load conda
-conda activate flora
+conda activate vflora
 
 scripts/prepare_glue_splits.sh qnli 3 10 20
 scripts/submit_qnli_e20r30_pipeline.sh 1 3
@@ -151,6 +151,14 @@ tuning_manifests/roberta_qnli_stratified_flora_ffa_rank4_seed0_e20_r30.tsv
 ```
 
 It submits three 10-round segments for the six manifest rows. Segment 1 starts fresh; segments 2 and 3 resume from each row's `server_state.pt`.
+
+For the 150-round version, use the e20/r150 wrapper and run 15 ten-round segments:
+
+```bash
+scripts/submit_qnli_e20r150_pipeline.sh 1 15
+```
+
+The e20/r30 wrapper intentionally defaults to `TOTAL_SEGMENTS=3` and a manifest with `rounds=30`. Running `scripts/submit_qnli_e20r30_pipeline.sh 1 15` is therefore not the right way to request 150 rounds; use the e20/r150 wrapper or override both `MANIFEST` and `TOTAL_SEGMENTS` together.
 
 ## Required Data Layout
 
