@@ -128,6 +128,12 @@ python -m fed_adapter.cli.split_data \
   --seed 0
 ```
 
+For the QNLI client-count sweep used by the RoBERTa e20/r30 manifest, the helper script runs the same command for 3, 10, and 20 clients:
+
+```bash
+scripts/prepare_glue_splits.sh qnli 3 10 20
+```
+
 Create an IID MRPC split:
 
 ```bash

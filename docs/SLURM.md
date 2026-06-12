@@ -123,6 +123,35 @@ sbatch --array=1-20 scripts/run_epoch_round_tuning.slurm
 
 Leave `ROBERTA_RESUME_FROM_LATEST=false` for first segments that do not already have `server_state.pt`.
 
+### QNLI E20/R30 Pipeline
+
+The FederatedLLM QNLI sequence:
+
+```bash
+python scripts/create_glue_federated_split.py --task-name qnli --num-clients 3 --output-root data_qnli_stratified --mode stratified --seed 0
+python scripts/create_glue_federated_split.py --task-name qnli --num-clients 10 --output-root data_qnli_stratified --mode stratified --seed 0
+python scripts/create_glue_federated_split.py --task-name qnli --num-clients 20 --output-root data_qnli_stratified --mode stratified --seed 0
+scripts/submit_qnli_e20r30_pipeline.sh 1 3
+```
+
+is now:
+
+```bash
+module load conda
+conda activate flora
+
+scripts/prepare_glue_splits.sh qnli 3 10 20
+scripts/submit_qnli_e20r30_pipeline.sh 1 3
+```
+
+The QNLI wrapper uses:
+
+```text
+tuning_manifests/roberta_qnli_stratified_flora_ffa_rank4_seed0_e20_r30.tsv
+```
+
+It submits three 10-round segments for the six manifest rows. Segment 1 starts fresh; segments 2 and 3 resume from each row's `server_state.pt`.
+
 ## Required Data Layout
 
 The scripts expect data roots like:
